@@ -1,0 +1,553 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PS Tools</title>
+    <script src="./js/csinterface.js"></script>
+</head>
+<style>
+    * {
+        margin: 0;
+        padding: 0;
+        box-sizing: border-box;
+    }
+
+    ::-webkit-scrollbar {
+        width: 10px;
+        background: #3c3c3c;
+    }
+
+    ::-webkit-scrollbar-track {
+        background: #3c3c3c;
+    }
+
+    ::-webkit-scrollbar-thumb {
+        background: #5e5e5e;
+        border: 2px solid #3c3c3c;
+        border-radius: 2px;
+        min-height: 20px;
+    }
+
+    ::-webkit-scrollbar-thumb:hover {
+        background: #717171;
+    }
+
+    ::-webkit-scrollbar-thumb:active {
+        background: #888;
+    }
+
+    ::-webkit-scrollbar-button {
+        display: none;
+        height: 0;
+        width: 0;
+    }
+
+    body.app {
+        background: #535353;
+        padding: 6px 8px;
+    }
+
+    .btn-row {
+        display: flex;
+        align-items: center;
+        width: 100%;
+        margin-top: 4px;
+    }
+
+    .btn-row:first-child {
+        margin-top: 0;
+    }
+
+    .btn-row.dragging {
+        opacity: 0.4;
+    }
+
+    .ps-btn {
+        flex: 1;
+        min-width: 0;
+        height: 22px;
+        line-height: 20px;
+        padding: 0 8px;
+        background: #4a4a4a;
+        color: #d1d1d1;
+        font-family: "Adobe Clean", "Segoe UI", Tahoma, sans-serif;
+        font-size: 11px;
+        border: 1px solid #222;
+        border-right: none;
+        border-radius: 2px 0 0 2px;
+        cursor: pointer;
+        outline: none;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        text-align: left;
+        user-select: none;
+    }
+
+    .ps-btn:hover {
+        background: #5a5a5a;
+        color: #ffffff;
+    }
+
+    .ps-btn:active {
+        background: #3a3a3a;
+    }
+
+    .drag-handle {
+        flex-shrink: 0;
+        width: 18px;
+        height: 22px;
+        background: #4a4a4a;
+        border: 1px solid #222;
+        border-radius: 0 2px 2px 0;
+        cursor: grab;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+    }
+
+    .drag-handle::before {
+        content: '';
+        display: block;
+        width: 8px;
+        height: 10px;
+        background-image: radial-gradient(circle, #777 1.5px, transparent 1.5px);
+        background-size: 4px 4px;
+        background-position: 1px 1px;
+        background-repeat: repeat;
+    }
+
+    .drag-handle:hover {
+        background: #5a5a5a;
+    }
+
+    .drag-handle:hover::before {
+        background-image: radial-gradient(circle, #aaa 1.5px, transparent 1.5px);
+    }
+
+    .drag-handle:active {
+        cursor: grabbing;
+        background: #3a3a3a;
+    }
+
+    .hotkey-tag {
+        flex-shrink: 0;
+        height: 22px;
+        min-width: 22px;
+        padding: 0 4px;
+        background: #3a3a3a;
+        border: 1px solid #222;
+        border-left: none;
+        border-right: none;
+        color: #888;
+        font-family: "Adobe Clean", "Segoe UI", Tahoma, sans-serif;
+        font-size: 10px;
+        line-height: 22px;
+        text-align: center;
+        cursor: pointer;
+        user-select: none;
+        white-space: nowrap;
+    }
+
+    .hotkey-tag:hover {
+        background: #444;
+        color: #bbb;
+    }
+
+    .hotkey-tag.listening {
+        background: #1a3a5c;
+        color: #4da6ff;
+        border-color: #4da6ff;
+    }
+
+    .drop-indicator {
+        height: 2px;
+        background: #4da6ff;
+        border-radius: 1px;
+        margin: 0;
+        pointer-events: none;
+        display: none;
+    }
+
+    .hint {
+        color: #888;
+        font-size: 11px;
+        font-family: "Adobe Clean", "Segoe UI", Tahoma, sans-serif;
+        padding: 6px 2px;
+        line-height: 1.5;
+    }
+
+    .toolbar {
+        display: flex;
+        justify-content: flex-end;
+        align-items: center;
+        margin-bottom: 5px;
+        gap: 2px;
+    }
+
+    .toolbar-expanded {
+        display: flex;
+    }
+
+    .toolbar-collapsed #open-folder-btn {
+        display: none;
+    }
+
+    .toolbar-collapsed #reload-btn {
+        display: none;
+    }
+
+    .toggle-toolbar-btn {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        width: 14px;
+        height: 14px;
+        background: transparent;
+        border: none;
+        border-radius: 2px;
+        cursor: pointer;
+        color: #666;
+        font-size: 9px;
+        line-height: 1;
+        padding: 0;
+        outline: none;
+        flex-shrink: 0;
+    }
+
+    .toggle-toolbar-btn:hover {
+        color: #aaa;
+    }
+
+    .icon-btn {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        width: 20px;
+        height: 20px;
+        background: transparent;
+        border: none;
+        border-radius: 2px;
+        cursor: pointer;
+        color: #888;
+        font-size: 13px;
+        line-height: 1;
+        padding: 0;
+        outline: none;
+    }
+
+    .icon-btn:hover {
+        background: #5a5a5a;
+        color: #ffffff;
+    }
+
+    .icon-btn:active {
+        background: #3a3a3a;
+    }
+</style>
+
+<body class="app">
+    <div class="toolbar toolbar-expanded" id="toolbar">
+        <button class="icon-btn" id="open-folder-btn" title="打开 scripts 文件夹">&#128193;</button>
+        <button class="icon-btn" id="reload-btn" title="刷新脚本列表">&#8635;</button>
+        <button class="toggle-toolbar-btn" id="toggle-toolbar-btn" title="收起">&#9654;</button>
+    </div>
+    <div id="btn-container"></div>
+    <script>
+        var fs = require('fs');
+        var path = require('path');
+        var shell = require('child_process');
+        var scriptsDir = path.join(__dirname, 'scripts');
+        var ORDER_KEY = 'ps_jsx_loader_order';
+        var HOTKEY_KEY = 'ps_jsx_loader_hotkeys';
+
+        function getSavedHotkeys() {
+            try { return JSON.parse(localStorage.getItem(HOTKEY_KEY)) || {}; } catch(e) { return {}; }
+        }
+
+        function saveHotkeys(map) {
+            localStorage.setItem(HOTKEY_KEY, JSON.stringify(map));
+        }
+
+        document.getElementById('open-folder-btn').addEventListener('click', function () {
+            shell.exec('explorer "' + scriptsDir + '"');
+        });
+
+        document.getElementById('reload-btn').addEventListener('click', function () {
+            loadButtons();
+        });
+
+        var toolbar = document.getElementById('toolbar');
+        var toggleBtn = document.getElementById('toggle-toolbar-btn');
+        var TOOLBAR_KEY = 'ps_jsx_loader_toolbar_collapsed';
+
+        function setToolbarState(collapsed) {
+            if (collapsed) {
+                toolbar.classList.remove('toolbar-expanded');
+                toolbar.classList.add('toolbar-collapsed');
+                toggleBtn.title = '展开';
+                toggleBtn.innerHTML = '&#9664;';
+                localStorage.setItem(TOOLBAR_KEY, '1');
+            } else {
+                toolbar.classList.add('toolbar-expanded');
+                toolbar.classList.remove('toolbar-collapsed');
+                toggleBtn.title = '收起';
+                toggleBtn.innerHTML = '&#9654;';
+                localStorage.setItem(TOOLBAR_KEY, '0');
+            }
+        }
+
+        setToolbarState(localStorage.getItem(TOOLBAR_KEY) === '1');
+
+        toggleBtn.addEventListener('click', function () {
+            setToolbarState(toolbar.classList.contains('toolbar-expanded'));
+        });
+
+        function getSavedOrder() {
+            try { return JSON.parse(localStorage.getItem(ORDER_KEY)) || []; } catch(e) { return []; }
+        }
+
+        function saveOrder(files) {
+            localStorage.setItem(ORDER_KEY, JSON.stringify(files));
+        }
+
+        function applyOrder(files) {
+            var saved = getSavedOrder();
+            var ordered = saved.filter(function(f) { return files.indexOf(f) !== -1; });
+            files.forEach(function(f) { if (ordered.indexOf(f) === -1) ordered.push(f); });
+            return ordered;
+        }
+
+        function loadButtons() {
+            var container = document.getElementById('btn-container');
+            container.innerHTML = '';
+
+            var files;
+            try {
+                files = fs.readdirSync(scriptsDir).filter(function (f) {
+                    return /\.jsx$/i.test(f);
+                });
+            } catch (e) {
+                files = [];
+            }
+
+            if (!files.length) {
+                var hint = document.createElement('div');
+                hint.className = 'hint';
+                hint.textContent = '将 .jsx 脚本放入 scripts/ 文件夹后重载面板即可自动生成按钮';
+                container.appendChild(hint);
+                return;
+            }
+
+            files = applyOrder(files);
+
+            var hotkeys = getSavedHotkeys();
+            var listeningTag = null;
+            var listeningFile = null;
+
+            function formatKey(e) {
+                var parts = [];
+                if (e.ctrlKey)  parts.push('Ctrl');
+                if (e.altKey)   parts.push('Alt');
+                if (e.shiftKey) parts.push('Shift');
+                var k = e.key;
+                if (k === ' ') k = 'Space';
+                if (k.length === 1) k = k.toUpperCase();
+                parts.push(k);
+                return parts.join('+');
+            }
+
+            function hotkeyLabel(file) {
+                for (var k in hotkeys) {
+                    if (hotkeys[k] === file) return k;
+                }
+                return '—';
+            }
+
+            document.addEventListener('keydown', function(e) {
+                if (!listeningTag) return;
+                if (e.key === 'Shift' || e.key === 'Control' || e.key === 'Alt' || e.key === 'Meta') return;
+                if (e.key === 'Escape') {
+                    listeningTag.classList.remove('listening');
+                    listeningTag.textContent = hotkeyLabel(listeningFile);
+                    listeningTag = null;
+                    listeningFile = null;
+                    return;
+                }
+                e.preventDefault();
+                e.stopPropagation();
+                var combo = formatKey(e);
+                for (var k in hotkeys) {
+                    if (hotkeys[k] === listeningFile) delete hotkeys[k];
+                }
+                if (hotkeys[combo]) delete hotkeys[combo];
+                hotkeys[combo] = listeningFile;
+                saveHotkeys(hotkeys);
+                listeningTag.textContent = combo;
+                listeningTag.classList.remove('listening');
+                listeningTag = null;
+                listeningFile = null;
+            }, true);
+
+            document.addEventListener('keydown', function(e) {
+                if (listeningTag) return;
+                var combo = formatKey(e);
+                if (hotkeys[combo]) {
+                    e.preventDefault();
+                    var targetFile = hotkeys[combo];
+                    var fullP = path.join(scriptsDir, targetFile).replace(/\\/g, '/');
+                    var cs = new CSInterface();
+                    cs.evalScript('runScript("' + fullP + '")');
+                }
+            });
+
+            var dragSrcFile = null;
+            var indicator = document.createElement('div');
+            indicator.className = 'drop-indicator';
+
+            function getButtonsInOrder() {
+                return Array.prototype.slice.call(container.querySelectorAll('.ps-btn'));
+            }
+
+            function insertIndicatorBefore(refBtn) {
+                container.insertBefore(indicator, refBtn);
+                indicator.style.display = 'block';
+            }
+
+            function insertIndicatorAfter(refBtn) {
+                var next = refBtn.nextSibling;
+                if (next && next === indicator) return;
+                container.insertBefore(indicator, next || null);
+                indicator.style.display = 'block';
+            }
+
+            function hideIndicator() {
+                indicator.style.display = 'none';
+                if (indicator.parentNode) indicator.parentNode.removeChild(indicator);
+            }
+
+            files.forEach(function (file) {
+                var row = document.createElement('div');
+                row.className = 'btn-row';
+                row.title = file;
+                row.draggable = true;
+
+                var btn = document.createElement('button');
+                btn.className = 'ps-btn';
+                btn.textContent = file.replace(/\.jsx$/i, '');
+                var fullPath = path.join(scriptsDir, file).replace(/\\/g, '/');
+
+                btn.addEventListener('click', function () {
+                    var cs = new CSInterface();
+                    cs.evalScript('runScript("' + fullPath + '")');
+                });
+
+                var hotTag = document.createElement('span');
+                hotTag.className = 'hotkey-tag';
+                hotTag.title = '点击绑定快捷键，再次点击清除';
+                hotTag.textContent = hotkeyLabel(file);
+
+                hotTag.addEventListener('click', function(e) {
+                    e.stopPropagation();
+                    if (listeningFile === file) {
+                        listeningTag.classList.remove('listening');
+                        listeningTag.textContent = '—';
+                        for (var k in hotkeys) { if (hotkeys[k] === file) delete hotkeys[k]; }
+                        saveHotkeys(hotkeys);
+                        listeningTag = null;
+                        listeningFile = null;
+                        return;
+                    }
+                    if (listeningTag) {
+                        listeningTag.classList.remove('listening');
+                        listeningTag.textContent = hotkeyLabel(listeningFile);
+                    }
+                    listeningTag = hotTag;
+                    listeningFile = file;
+                    hotTag.textContent = '...';
+                    hotTag.classList.add('listening');
+                });
+
+                var handle = document.createElement('span');
+                handle.className = 'drag-handle';
+                handle.title = '拖动调整顺序';
+
+                var allowDrag = false;
+                handle.addEventListener('mousedown', function () { allowDrag = true; });
+
+                row.addEventListener('dragstart', function (e) {
+                    if (!allowDrag) {
+                        e.preventDefault();
+                        return;
+                    }
+                    dragSrcFile = file;
+                    row.classList.add('dragging');
+                    e.dataTransfer.effectAllowed = 'move';
+                    e.dataTransfer.setData('text/plain', file);
+                });
+
+                row.addEventListener('dragend', function () {
+                    allowDrag = false;
+                    row.classList.remove('dragging');
+                    hideIndicator();
+                });
+
+                row.addEventListener('dragover', function (e) {
+                    e.preventDefault();
+                    e.dataTransfer.dropEffect = 'move';
+                    if (file === dragSrcFile) return;
+                    var rect = row.getBoundingClientRect();
+                    var mid = rect.top + rect.height / 2;
+                    if (e.clientY < mid) {
+                        insertIndicatorBefore(row);
+                    } else {
+                        insertIndicatorAfter(row);
+                    }
+                });
+
+                row.appendChild(btn);
+                row.appendChild(hotTag);
+                row.appendChild(handle);
+                container.appendChild(row);
+            });
+
+            container.addEventListener('dragover', function(e) {
+                e.preventDefault();
+            });
+
+            container.addEventListener('drop', function(e) {
+                e.preventDefault();
+                if (!dragSrcFile) return;
+                if (indicator.style.display === 'none' || !indicator.parentNode) return;
+
+                var nextRow = null;
+                var sibling = indicator.nextSibling;
+                while (sibling) {
+                    if (sibling.classList && sibling.classList.contains('btn-row')) {
+                        nextRow = sibling;
+                        break;
+                    }
+                    sibling = sibling.nextSibling;
+                }
+
+                var srcIdx = files.indexOf(dragSrcFile);
+                files.splice(srcIdx, 1);
+
+                if (!nextRow) {
+                    files.push(dragSrcFile);
+                } else {
+                    var dstIdx = files.indexOf(nextRow.title);
+                    files.splice(dstIdx, 0, dragSrcFile);
+                }
+
+                saveOrder(files);
+                loadButtons();
+            });
+        }
+
+        loadButtons();
+    </script>
+</body>
+
+</html>
