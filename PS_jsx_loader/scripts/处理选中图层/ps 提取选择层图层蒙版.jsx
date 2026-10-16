@@ -414,7 +414,15 @@ function hasLayerMaskDetailed(layer) {
                 // 如果通过ID引用失败，尝试通过索引引用
                 var ref = new ActionReference();
                 ref.putProperty(charIDToTypeID("Prpr"), charIDToTypeID("UsrM"));
-                ref.putIndex(charIDToTypeID("Lyr "), app.activeDocument.layers.indexOf(layer) + 1);
+                // ★ 不能用 Array.indexOf（这台 PS 的 ExtendScript 没有 ES5 数组方法），手写查找
+                var __ls = app.activeDocument.layers;
+                var __idx = 0;
+                for (var __i = 0; __i < __ls.length; __i++) {
+                    var __same = false;
+                    try { __same = (__ls[__i].id === layer.id); } catch (__e) { __same = (__ls[__i] === layer); }
+                    if (__same) { __idx = __i; break; }
+                }
+                ref.putIndex(charIDToTypeID("Lyr "), __idx + 1);
                 executeActionGet(ref);
                 methods.push("方法3 (ActionManager 索引): 检测到蒙版");
                 result.hasMask = true;

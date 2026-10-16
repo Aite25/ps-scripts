@@ -186,39 +186,10 @@
         gap: 2px;
     }
 
-    .toolbar-expanded {
-        display: flex;
-    }
 
-    .toolbar-collapsed #open-folder-btn {
-        display: none;
-    }
 
-    .toolbar-collapsed #reload-btn {
-        display: none;
-    }
 
-    .toggle-toolbar-btn {
-        display: inline-flex;
-        align-items: center;
-        justify-content: center;
-        width: 14px;
-        height: 14px;
-        background: transparent;
-        border: none;
-        border-radius: 2px;
-        cursor: pointer;
-        color: #666;
-        font-size: 9px;
-        line-height: 1;
-        padding: 0;
-        outline: none;
-        flex-shrink: 0;
-    }
 
-    .toggle-toolbar-btn:hover {
-        color: #aaa;
-    }
 
     .icon-btn {
         display: inline-flex;
@@ -248,12 +219,102 @@
 </style>
 
 <body class="app">
-    <div class="toolbar toolbar-expanded" id="toolbar">
-        <button class="icon-btn" id="open-folder-btn" title="打开 scripts 文件夹">&#128193;</button>
+    <div class="toolbar-sticky-slot" id="toolbar-slot">
+        <div class="toolbar" id="toolbar">
+        <button class="icon-btn" id="open-folder-btn" title="打开 scripts 文件夹"><svg width="14" height="14" viewBox="0 0 24 24" style="vertical-align:-2px"><path d="M3 7.4A1.4 1.4 0 0 1 4.4 6h4.3c.5 0 .9.2 1.2.6l.9 1.1c.3.4.7.6 1.2.6h7.6A1.4 1.4 0 0 1 21 9.7v7.9A1.4 1.4 0 0 1 19.6 19H4.4A1.4 1.4 0 0 1 3 17.6V7.4z" fill="#6f6f6f" stroke="#bdbdbd" stroke-width="1.4" stroke-linejoin="round"/></svg></button>
         <button class="icon-btn" id="reload-btn" title="刷新脚本列表">&#8635;</button>
-        <button class="toggle-toolbar-btn" id="toggle-toolbar-btn" title="收起">&#9654;</button>
+        <button class="icon-btn" id="refresh-panel-btn" title="重新打开面板（等于关掉扩展再打开，改完面板样式/逻辑后用）">&#10227;</button>
+    </div>
     </div>
     <div id="btn-container"></div>
+    <style>
+        /* ===== 面板修正（覆盖式，不动原样式） ===== */
+        /* ★ 文件夹行的布局必须由【样式表】兜底：
+           原来 display:flex / align-items / gap 全靠 head.style.cssText 的行内值撑着，
+           一旦哪里把它清成 ''（曾经就有：folderDragEnd 里 head.style.display = ''），
+           整行就退回 block、元素竖堆、压住下面的行。这里在 CSS 里再定一遍，双保险。 */
+        .folder-row {
+            width: 100%; box-sizing: border-box; color: #e8e8e8;
+            display: flex; align-items: center; gap: 6px;
+            height: 22px; padding: 0 0 0 6px; margin: 4px 0 0 0;
+            border: 1px solid #222; border-radius: 2px;
+        }
+        .folder-row .sec-arrow { color: #e8e8e8 !important; }
+        .folder-row .sec-label { color: #e8e8e8 !important; font-size: 11px !important; }
+        .folder-row .sec-count { font-size: 10px !important; }
+        /* 文件夹行背景加深，突出层级 */
+        .folder-row { background: #2c2c2c !important; }
+        /* 老 WebKit/CEF 需要这个才允许拖 div */
+        .folder-row, .folder-row .drag-handle { -webkit-user-drag: element; }
+        .folder-row:hover { background: #3a3a3a !important; }
+        .sec-body { box-sizing: border-box; }
+        /* 展开后第一条与文件夹行之间也要有和其它条目一样大的间距 */
+        .sec-body .btn-row:first-child { margin-top: 4px !important; }
+        /* 落点示意：与条目等大的矩形，并显示被拖脚本的名字（看起来就是"它会落在这里"）
+           想改回细横线：height 改 2px、去掉 border、background 改 #4da6ff */
+        .drop-indicator {
+            height: 22px !important;
+            margin: 4px 0 0 0 !important;
+            background: rgba(77, 166, 255, 0.22) !important;
+            border: 1px solid #4da6ff !important;
+            border-radius: 2px !important;
+            box-sizing: border-box !important;
+            color: #dbeaff !important;
+            font-family: "Adobe Clean", "Segoe UI", Tahoma, sans-serif !important;
+            font-size: 11px !important;
+            line-height: 20px !important;
+            padding: 0 8px !important;
+            overflow: hidden !important;
+            white-space: nowrap !important;
+            text-overflow: ellipsis !important;
+            text-align: left !important;
+        }
+        /* 拖动时不显示原来的条目（只留蓝矩形）。
+           ★ 不能用 display:none —— 拖动源被隐藏会让浏览器直接中止拖拽（所有行都拖不动）。
+           用 opacity:0：视觉上看不到原条目，但拖拽不受影响。 */
+        /* ===== 拖到文件夹【内部】时：分界线 + 上/下半区高亮 =====
+           中线以上 = 放到该文件夹【上方】；中线以下 = 放到该文件夹【下方】。
+           高亮层是绝对定位的覆盖层，所以 .folder-sec 要有 position:relative。 */
+        .folder-sec { position: relative; }
+        .folder-half-hl {
+            position: absolute; left: 0; right: 0;
+            pointer-events: none;
+            background: rgba(77, 166, 255, 0.20);
+            border: 0 solid #4da6ff;
+            border-radius: 2px;
+            z-index: 5;
+        }
+        .folder-half-hl.top    { top: 0;   bottom: 50%; border-bottom-width: 2px; }
+        .folder-half-hl.bottom { top: 50%; bottom: 0;   border-top-width: 2px; }
+        .btn-row.dragging { opacity: 0 !important; }
+        /* 拖拽把手：已恢复原样（原来的 .drag-handle 样式生效，此处不再覆盖） */
+        /* ===== 顶部工具栏常驻（滚动脚本列表时不被滚走）=====
+           为什么用 fixed 而不是 sticky：旧版 CEF 对 position:sticky 支持不稳定，
+           fixed 相对面板视口定位，最可靠。工具栏自己占位（body 用 padding-top 让开），
+           所以内容不会被盖住。 */
+        /* ★ 把 sticky 挂在外面这个「占位条」上：
+           可见的工具栏自己始终是 static，
+           所以滚动时它不会发生任何位移（不会有 "微偏移"）。
+           占位条保证内容从工具栏下方开始排，不会钻到图标下面。
+           旧 CEF 不支持 sticky 时会自动降级为普通布局（= 以前的行为）。 */
+        .toolbar-sticky-slot {
+            position: sticky !important;
+            top: 0 !important;
+            z-index: 1000 !important;
+        }
+        /* ★ body 上边距归 0：否则占位条在文档里是从 6px 处开始的，
+           滚到顶部时工具栏在 6px、往下滚就跳到 0px，看起来就是"位置往下移"。
+           间距改由工具栏自己的 padding-top 提供。 */
+        body.app { padding-top: 0 !important; }
+        .toolbar {
+            position: static !important;
+            margin-bottom: 0 !important;
+            background: #535353 !important;
+            /* 上 6px：图标不贴死面板上沿（这一层是包含在占位条里的，不会引起位移）
+               下 4px：与列表的间隙；左右 8px：与 body 的左右边距对齐 */
+            padding: 6px 8px 4px 8px !important;
+        }
+    </style>
     <script>
         var fs = require('fs');
         var path = require('path');
@@ -278,31 +339,34 @@
             loadButtons();
         });
 
-        var toolbar = document.getElementById('toolbar');
-        var toggleBtn = document.getElementById('toggle-toolbar-btn');
-        var TOOLBAR_KEY = 'ps_jsx_loader_toolbar_collapsed';
 
-        function setToolbarState(collapsed) {
-            if (collapsed) {
-                toolbar.classList.remove('toolbar-expanded');
-                toolbar.classList.add('toolbar-collapsed');
-                toggleBtn.title = '展开';
-                toggleBtn.innerHTML = '&#9664;';
-                localStorage.setItem(TOOLBAR_KEY, '1');
-            } else {
-                toolbar.classList.add('toolbar-expanded');
-                toolbar.classList.remove('toolbar-collapsed');
-                toggleBtn.title = '收起';
-                toggleBtn.innerHTML = '&#9654;';
-                localStorage.setItem(TOOLBAR_KEY, '0');
+        document.getElementById('refresh-panel-btn').addEventListener('click', function () {
+            reloadPanelForReal();
+        });
+
+        /* ★ 真正能刷新面板的做法：
+           CEP 面板把 index.html 缓存在内存里，
+           location.reload() / location.reload(true) 在这里拿到的还是旧的一份
+           （点了跟没点一样）。
+           标准做法是：给 URL 加一个变化的参数重新请求，
+           缓存键不同就会从磁盘重新读。
+           万一这个版本不支持带参数的 URL，就退回普通 reload。 */
+        function reloadPanelForReal() {
+            function go(url) {
+                try { location.href = url; return true; } catch (eN) { return false; }
             }
+            try {
+                var base = String(location.href).split('#')[0].split('?')[0];
+                var url = base + '?r=' + (new Date()).getTime();
+                if (go(url)) return;
+            } catch (e1) {}
+            try { location.reload(); return; } catch (e2) {}
+            try { location.href = location.href; } catch (e3) {}
         }
 
-        setToolbarState(localStorage.getItem(TOOLBAR_KEY) === '1');
 
-        toggleBtn.addEventListener('click', function () {
-            setToolbarState(toolbar.classList.contains('toolbar-expanded'));
-        });
+
+
 
         function getSavedOrder() {
             try { return JSON.parse(localStorage.getItem(ORDER_KEY)) || []; } catch(e) { return []; }
@@ -319,15 +383,380 @@
             return ordered;
         }
 
+        // ================= 树状列举（按文件夹折叠，仿 PS 图层面板） =================
+        var FOLD_KEY = 'psjsx.folders';
+        var FOLDER_ORDER_KEY = 'psjsx.folderOrder';
+
+
+        function getFolderOrder() {
+            try { return JSON.parse(localStorage.getItem(FOLDER_ORDER_KEY)) || []; } catch (e) { return []; }
+        }
+        function setFolderOrder(list) {
+            try { localStorage.setItem(FOLDER_ORDER_KEY, JSON.stringify(list)); } catch (e) {}
+        }
+        function savedFolderIndex(name) {
+            var o = getFolderOrder();
+            for (var i = 0; i < o.length; i++) { if (o[i] === name) return i; }
+            return 9999;
+        }
+        // 从任意节点往上找"文件夹标题行"
+        function nearestFolderRow(el) {
+            var n = el;
+            while (n && n.nodeType === 1) {
+                if (n.classList && n.classList.contains('folder-row')) return n;
+                n = n.parentNode;
+            }
+            return null;
+        }
+        function folderNameOfRow(folderRow) {
+            return folderRow ? (folderRow.getAttribute('data-folder') || '') : '';
+        }
+
+        function getFoldState() {
+            try { return JSON.parse(localStorage.getItem(FOLD_KEY) || '{}'); } catch (e) { return {}; }
+        }
+        function setFoldState(st) {
+            try { localStorage.setItem(FOLD_KEY, JSON.stringify(st)); } catch (e) {}
+        }
+
+        // 递归列举脚本：文件夹在前（按拼音排序），返回相对路径，例如 "批量流程/ps 01 xxx.jsx"
+        function listScripts(dir) {
+            var out = [], dirs = [], loose = [];
+            var entries;
+            try {
+                entries = fs.readdirSync(dir, { withFileTypes: true });
+            } catch (e) {
+                try {
+                    entries = fs.readdirSync(dir).map(function (n) {
+                        return { name: n, isDirectory: function () { return false; } };
+                    });
+                } catch (e2) { return out; }
+            }
+            entries.forEach(function (en) {
+                var nm = en.name;
+                if (!nm || nm.charAt(0) === '.' || nm === 'node_modules') return;
+                var isDir = false;
+                try { isDir = (en.isDirectory && en.isDirectory()); } catch (e3) {}
+                if (isDir) { dirs.push(nm); return; }
+                if (/\.jsx$/i.test(nm)) loose.push(nm);
+            });
+            dirs.sort(function (x, y) {
+                var ox = savedFolderIndex(x), oy = savedFolderIndex(y);
+                if (ox !== oy) return ox - oy;
+                return x.localeCompare(y, 'zh');
+            });
+            loose.sort(function (x, y) { return x.localeCompare(y, 'zh'); });
+            dirs.forEach(function (d) {
+                listScripts(path.join(dir, d)).forEach(function (sub) { out.push(d + '/' + sub); });
+            });
+            loose.forEach(function (f) { out.push(f); });
+            return out;
+        }
+
+        // 找到真正能滚动的那一层容器（不同 PS 版本 DOM 结构不一定一样）
+        function scrollParent(el) {
+            var n = el ? el.parentNode : null;
+            while (n && n.nodeType === 1) {
+                try {
+                    var st = window.getComputedStyle(n);
+                    if (/(auto|scroll|overlay)/.test(st.overflowY) && n.scrollHeight > n.clientHeight) return n;
+                } catch (e) {}
+                n = n.parentNode;
+            }
+            return (document.scrollingElement || document.documentElement || document.body);
+        }
+
+        // 某个脚本行该挂到哪里：无文件夹前缀 → 顶层；有前缀 → 对应的折叠区块
+        function sectionFor(container, file) {
+            var idx = file.lastIndexOf('/');
+            if (idx === -1) return container;
+            var folder = file.substring(0, idx);
+            var id = 'sec-' + folder.replace(/[^0-9A-Za-z\u4e00-\u9fa5]+/g, '_');
+            var existed = document.getElementById(id);
+            if (existed) {
+                var eb = existed.querySelector('.sec-body');
+                var ec = existed.querySelector('.sec-count');
+                if (ec) ec.textContent = (parseInt(ec.getAttribute('data-n') || '0', 10) + 1) + ' 个';
+                if (ec) ec.setAttribute('data-n', parseInt(ec.getAttribute('data-n') || '0', 10) + 1);
+                return eb;
+            }
+
+            var st = getFoldState();
+            var open = (st[folder] !== false);              // 默认展开
+
+            var sec = document.createElement('div');
+            sec.className = 'folder-sec';
+            sec.id = id;
+
+            var head = document.createElement('div');
+            head.className = 'folder-row';
+            // 高度与脚本行一致（脚本按钮是 height:22px + margin-top:4px）
+            head.style.cssText = 'display:flex;align-items:center;gap:6px;' +
+                                 'height:22px;padding:0 0 0 6px;margin:4px 0 0 0;width:100%;box-sizing:border-box;' +
+                                 'border:1px solid #222;border-radius:2px;background:#2c2c2c;' +
+                                 'color:#e8e8e8;cursor:pointer;user-select:none;';
+            head.title = folder + '（点击展开 / 收起）';
+
+            var arrow = document.createElement('span');
+            arrow.className = 'sec-arrow';
+            arrow.textContent = open ? '\u25be' : '\u25b8';
+            arrow.style.cssText = 'width:12px;text-align:center;color:#e8e8e8;';
+
+            var icon = document.createElement('span');
+            icon.style.cssText = 'width:14px;height:14px;flex:0 0 14px;display:block;';
+            icon.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" style="display:block">' +
+                '<path d="M3 7.4A1.4 1.4 0 0 1 4.4 6h4.3c.5 0 .9.2 1.2.6l.9 1.1c.3.4.7.6 1.2.6h7.6A1.4 1.4 0 0 1 21 9.7v7.9A1.4 1.4 0 0 1 19.6 19H4.4A1.4 1.4 0 0 1 3 17.6V7.4z" ' +
+                'fill="#6f6f6f" stroke="#bdbdbd" stroke-width="1.4" stroke-linejoin="round"/></svg>';
+
+            var label = document.createElement('span');
+            label.className = 'sec-label';
+            label.textContent = folder;
+            label.style.cssText = 'flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#e8e8e8;';
+
+            var cnt = document.createElement('span');
+            cnt.className = 'sec-count';
+            cnt.setAttribute('data-n', '1');
+            cnt.textContent = '1 个';
+            cnt.style.cssText = 'opacity:.45;font-size:11px;';
+
+            head.appendChild(arrow); head.appendChild(icon);
+            head.appendChild(label); head.appendChild(cnt);
+
+            var body = document.createElement('div');
+            body.className = 'sec-body';
+            body.style.cssText = 'margin-left:10px;padding-left:8px;border-left:1px solid #4a4a4a;display:' +
+                                 (open ? 'block' : 'none') + ';';
+
+            head.addEventListener('click', function () {
+                // 展开/收起会改变内容高度，这里把"这一行在视口里的位置"固定住，
+                // 免得用户点完发现文件夹跳走了（到顶/到底时由浏览器自然夹住）
+                var sc = scrollParent(head);
+                var anchorTop = head.getBoundingClientRect().top;
+
+                var nowOpen = (body.style.display === 'none');
+                body.style.display = nowOpen ? 'block' : 'none';
+                arrow.textContent = nowOpen ? '\u25be' : '\u25b8';
+                var st2 = getFoldState();
+                st2[folder] = nowOpen;
+                setFoldState(st2);
+
+                try {
+                    var delta = head.getBoundingClientRect().top - anchorTop;
+                    if (sc && delta) sc.scrollTop = sc.scrollTop + delta;
+                } catch (eSc) {}
+            });
+
+            head.setAttribute('data-folder', folder);
+
+            // 手柄：与脚本行同款（拖动它可以调整文件夹之间的顺序）
+            var fh = document.createElement('span');
+            fh.className = 'drag-handle';
+            fh.title = '拖动调整文件夹顺序';
+            head.appendChild(fh);
+
+            head.draggable = true;                              // 整行可拖
+            head.setAttribute('draggable', 'true');             // 属性形式（部分 CEF 只认属性）
+
+            function folderDragStart(e) {
+                folderDragSrc = folder;
+                folderDropBefore = true;      // 每次开拖先复位，dragover 会覆盖它
+                /* ★ 拍一份"文件夹区块几何"快照：整场拖拽都用它判定落点 */
+                try { if (REORDER.freezeGeo) REORDER.freezeGeo(); } catch (eFG) {}
+            /* ★★★ 文件夹标题一律【只变暗】，绝不用 display:none 藏起来 ★★★
+               踩过的坑（用户报"文件夹拖动之后在面板里消失了，刷新才回来"）：
+                 原来折叠状态会 setTimeout 把 head.style.display 设成 'none'，
+                 然后靠 dragend 里的 head.__psjsxHidden 判断该还原成 none 还是 flex。
+                 但【拖拽不一定触发重绘】——落到无效位置、拖出面板、
+                 落到某个文件夹内部的行上（容器级那句直接 return），都不会重绘，
+                 于是那个 display:none 就【留在界面上】：文件夹标题整个不见了，
+                 只有刷新面板重建 DOM 才回来。
+               现在只用 opacity 变暗（dragend 一句就能恢复，而且即使 dragend 没跑到，
+               下面的自愈也会清掉）。位置提示交给"在流里的蓝框"，它本来就会把目标推开。 */
+            try { head.style.opacity = '0.45'; } catch (eOp2) {}
+                // 蓝框里也要有内容（和文件夹行一致的灰色描边图标 + 名字）
+                try {
+                    var _ind = REORDER.indicator || document.querySelector('.drop-indicator');
+                    _ind.innerHTML = '<svg width="12" height="12" viewBox="0 0 24 24" ' +
+                        'style="vertical-align:-2px;margin-right:4px">' +
+                        '<path d="M3 7.4A1.4 1.4 0 0 1 4.4 6h4.3c.5 0 .9.2 1.2.6l.9 1.1c.3.4.7.6 1.2.6h7.6A1.4 1.4 0 0 1 21 9.7v7.9A1.4 1.4 0 0 1 19.6 19H4.4A1.4 1.4 0 0 1 3 17.6V7.4z" ' +
+                        'fill="#6f6f6f" stroke="#bdbdbd" stroke-width="1.6"/></svg>' + folder;
+                } catch (eTxt) {}
+                try {
+                    e.dataTransfer.effectAllowed = 'move';
+                    e.dataTransfer.setData('text/plain', folder);
+                } catch (eDt) {}
+            }
+            function folderDragEnd() {
+                folderDragSrc = null;
+                try { head.style.opacity = ''; } catch (eOp3) {}
+                try { head.style.outline = ''; } catch (eOl) {}
+                /* ★★★ 千万别写 head.style.display = '' ★★★
+                   文件夹行的 display:flex 是用 head.style.cssText 写在【行内】的
+                   （见上面建 head 的地方）。清成 '' 会把 display 一起清掉，
+                   文件夹行就从 flex 退回 block —— 箭头/图标/名字/计数竖着堆、
+                   行高从 22px 撑成三行、压住下面那些行。
+                   这就是"拖动文件夹换序后 UI 样式坏掉、元素重叠、位置不准"的原因：
+                     · 脚本行没事（.btn-row 的 flex 来自【样式表】，清行内值会回落）
+                     · 只有文件夹行的 flex 是行内写的，清掉就坏
+                     · 落点无效/拖拽被中止时【不会重绘】，这个坏状态就留在界面上
+                   要恢复就恢复成具体的值：折叠时被设成 none，其余时候是 flex。 */
+                /* 文件夹标题【永远】恢复成 flex —— 它是常显的（折叠只影响下面的 body）。 */
+                try { head.style.display = 'flex'; } catch (eOp4) {}
+                try { head.__psjsxHidden = false; } catch (eOp5) {}
+            }
+
+            head.addEventListener('dragstart', folderDragStart);
+            head.addEventListener('dragend', folderDragEnd);
+            head.addEventListener('dragover', function (e) {
+                /* ★★★ 标题行不再自己判定落点 ★★★
+                   落点预览统一交给【容器级】处理器：它用「拖拽开始时冻结的几何 + 中线」判定，
+                   所以光标压在【标题行 / 标题与第一条脚本之间的空隙 / 脚本行】上，
+                   规则完全一样、结论也完全一样。
+                   原来这里用"标题行自己的中点"判定，而下面的脚本行用"整个区块的中点"，
+                   两套标准不一致，光标在两者边界上来回压 -> 疯狂闪烁。
+                   （这里也不 stopPropagation，让事件冒泡到容器级处理器。） */
+                if (!folderDragSrc && (!dragSrcFile || folderOf(dragSrcFile) !== '')) return;
+                e.preventDefault();
+                /* 落点预览在容器级处理器里统一做（见上面的说明） */
+            });
+            head.addEventListener('dragleave', function () { head.style.outline = ''; });
+            head.addEventListener('drop', function (e) {
+                head.style.outline = '';
+                // 拖到自己身上（或只有一个文件夹时）→ 本次不做换序：
+                // 清掉蓝框、重绘，并且【不吞事件】，让容器级的"整块搬移"有机会处理
+                if (!folderDragSrc || folderDragSrc === folder) {
+                    // 只收蓝框，绝不重绘（重绘会让蓝框变游离节点，后续全部失效）
+                    try { if (REORDER.hideInd) REORDER.hideInd(); } catch (eH1) {}
+                    return;
+                }
+                e.preventDefault();
+                e.stopPropagation();
+                var order = getFolderOrder();
+                var all = [];
+                var secs = container.querySelectorAll('.folder-sec');
+                for (var i2 = 0; i2 < secs.length; i2++) {
+                    var nm2 = folderNameOfRow(secs[i2].querySelector('.folder-row'));
+                    if (nm2) all.push(nm2);
+                }
+                for (var j2 = 0; j2 < order.length; j2++) { if (all.indexOf(order[j2]) === -1) all.push(order[j2]); }
+                var from = all.indexOf(folderDragSrc);
+                if (from === -1) return;
+                /* ★ 先移除、再重新找目标的索引：
+                   原来是一起算好 from/to 再 splice，from < to 时会因为"移除后整体左移 1"
+                   把被拖的文件夹插到目标【后面】—— 顺序差一位。 */
+                all.splice(from, 1);
+                var to = all.indexOf(folder);
+                if (to === -1) all.push(folderDragSrc);
+                else all.splice(folderDropBefore ? to : to + 1, 0, folderDragSrc);
+                setFolderOrder(all);
+
+                /* ★★ 光改"文件夹顺序"是不够的 ★★
+                   loadButtons() 里是这么两步：
+                     files = listScripts(...)   -- 这一步按 FOLDER_ORDER_KEY 排文件夹
+                     files = applyOrder(files)  -- 这一步按【ORDER_KEY（文件顺序）】把整个扁平列表重排
+                   只要以前拖过脚本，ORDER_KEY 里就有一份完整的旧顺序，
+                   于是第二步会把第一步刚排好的文件夹顺序【又排回去】——
+                   表现就是"拖了文件夹、位置却不对/没反应"。
+                   所以这里还要把被拖文件夹的【整块文件】在扁平列表里搬到目标文件夹前面，
+                   让两个顺序保持一致（moveBlockTo 内部会 saveOrder + loadButtons）。 */
+                var dragFolder = folderDragSrc;
+                var targetFirst = null;
+                try {
+                    var rowsNow = container.querySelectorAll('.btn-row');
+                    for (var r3 = 0; r3 < rowsNow.length; r3++) {
+                        var tf = rowsNow[r3].title || '';
+                        var tfIdx = tf.lastIndexOf('/');
+                        var tfFolder = (tfIdx === -1) ? '' : tf.substring(0, tfIdx);
+                        if (tfFolder === folder) { targetFirst = tf; break; }
+                    }
+                } catch (eTF) {}
+                var __before = folderDropBefore;
+                folderDragSrc = null;
+                folderDropBefore = true;
+                if (targetFirst && REORDER.moveBlockTo) {
+                    /* ★ 用和预览一致的 folderDropBefore（原来是写死 true = 永远放前面，
+                       所以"放到下面"根本落不了地）。 */
+                    REORDER.moveBlockTo(dragFolder, targetFirst, __before);
+                } else {
+                    loadButtons();
+                }
+            });
+
+            sec.appendChild(head);
+            sec.appendChild(body);
+            container.appendChild(sec);
+            return body;
+        }
+
+        var folderDragSrc = null;      // 正在拖动的文件夹名
+        /* 拖文件夹时，落点是在目标文件夹的【前面】还是【后面】。
+           由 dragover 里鼠标在目标行上半/下半区决定，drop 时读它。 */
+        var folderDropBefore = true;
+
+        // loadButtons 内部的东西（files / 指示块 / 保存 / 重绘）在这里暴露给 sectionFor 使用
+        var REORDER = {
+            files: null,
+            indicator: null,
+            indBefore: null,
+            indAfter: null,
+            placeFolderInd: null,      // (sec, before) 拖文件夹时把蓝框放到目标前/后
+            hideInd: null,
+            save: null,
+            reload: null,
+            moveBlockTo: null          // (folder, targetRel, before)
+        };
+
+        // 把 item 移到 target 的前面/后面。
+        // ★ 关键：先移除 item，再重新查 target 的索引 —— 这样不会因为 splice 位移而错位。
+        function moveItem(list, item, target, before) {
+            if (item === target) return true;      // ★ 自我移动：保持不变（否则会先移除自己、再找不到目标 → 被推到末尾）
+            var i = list.indexOf(item);
+            if (i === -1) return false;
+            list.splice(i, 1);
+            var j = list.indexOf(target);
+            if (j === -1) { list.push(item); return false; }
+            list.splice(before ? j : j + 1, 0, item);
+            return true;
+        }
+
+        function folderOfPath(f) {
+            var i = f.lastIndexOf('/');
+            return (i === -1) ? '' : f.substring(0, i);
+        }
+
+        // 取某个文件夹的所有子项（保持它们在列表里的相对顺序）
+        function blockOf(folder) {
+            var out = [];
+            var list = REORDER.files || [];
+            for (var i = 0; i < list.length; i++) {
+                if (folderOfPath(list[i]) === folder) out.push(list[i]);
+            }
+            return out;
+        }
+
         function loadButtons() {
             var container = document.getElementById('btn-container');
+            /* ★ 重绘前先把可能残留的落点蓝框清干净。
+               蓝框是普通流里的 22px 矩形，要是留在 DOM 里就会看起来"多了一行/压住了内容"。
+               顺带复位 srcRow（它指向上一轮的行，重绘后就变成游离节点，
+               会让 showAtSource 把蓝框画到莫名其妙的位置）。 */
+            try {
+                var __strays = document.querySelectorAll('.drop-indicator');
+                for (var __si = 0; __si < __strays.length; __si++) {
+                    if (__strays[__si].parentNode) __strays[__si].parentNode.removeChild(__strays[__si]);
+                }
+                /* ★ 同样的道理：半区高亮也是绝对定位的覆盖层，重绘前清干净 */
+                var __hl = document.querySelectorAll('.folder-half-hl');
+                for (var __hi = 0; __hi < __hl.length; __hi++) {
+                    if (__hl[__hi].parentNode) __hl[__hi].parentNode.removeChild(__hl[__hi]);
+                }
+            } catch (eStray) {}
+            try { REORDER.srcRow = null; } catch (eRs) {}
             container.innerHTML = '';
 
             var files;
             try {
-                files = fs.readdirSync(scriptsDir).filter(function (f) {
-                    return /\.jsx$/i.test(f);
-                });
+                files = listScripts(scriptsDir);
             } catch (e) {
                 files = [];
             }
@@ -342,7 +771,33 @@
 
             files = applyOrder(files);
 
-            var hotkeys = getSavedHotkeys();
+            // 暴露给小工具（原地修改 files，不能重新赋值）
+            REORDER.files = files;
+            REORDER.secCache = {};          /* ★ 每次重绘清掉区块缓存 */
+            REORDER.geo = null;             /* ★ 每次重绘清掉冻结的几何快照 */
+            REORDER.indBefore = insertIndicatorBefore;
+            REORDER.indAfter = insertIndicatorAfter;
+            REORDER.hideInd = hideIndicator;
+            REORDER.save = saveOrder;
+            REORDER.reload = loadButtons;
+            REORDER.moveBlockTo = function (folder, targetRel, before) {
+                var kids = blockOf(folder);                  // 这一块的所有子项（保持内部顺序）
+                if (!kids.length) return;
+                if (files.indexOf(targetRel) === -1) return; // 目标不在列表里 → 不动
+                if (before) {
+                    // 依次插到目标前面（每个都插在 target 正前方 → 最终顺序与 kids 一致）
+                    for (var i = 0; i < kids.length; i++) moveItem(files, kids[i], targetRel, true);
+                } else {
+                    // 依次插到目标后面：倒着插，每个都落在 target 正后方
+                    for (var k = kids.length - 1; k >= 0; k--) moveItem(files, kids[k], targetRel, false);
+                }
+                saveOrder(files);
+                loadButtons();
+            };
+
+            // ★ 快捷键功能已移除：清掉以前存下的绑定，避免误触发
+            try { localStorage.removeItem(HOTKEY_KEY); } catch (eHK) {}
+            var hotkeys = {};
             var listeningTag = null;
             var listeningFile = null;
 
@@ -393,7 +848,7 @@
             document.addEventListener('keydown', function(e) {
                 if (listeningTag) return;
                 var combo = formatKey(e);
-                if (hotkeys[combo]) {
+                if (false && hotkeys[combo]) {     // ★ 快捷键功能已移除
                     e.preventDefault();
                     var targetFile = hotkeys[combo];
                     var fullP = path.join(scriptsDir, targetFile).replace(/\\/g, '/');
@@ -405,26 +860,294 @@
             var dragSrcFile = null;
             var indicator = document.createElement('div');
             indicator.className = 'drop-indicator';
+            REORDER.indicator = indicator;          // ★ 必须在创建之后赋值（原来赋在创建之前 → undefined）
+            REORDER.showAtSource = function () {
+                // 落点无效时，把蓝框画回"脚本原来所在的位置"，作为当前位置提示
+                try {
+                    if (REORDER.srcRow && REORDER.srcRow.parentNode) {
+                        REORDER.srcRow.parentNode.insertBefore(indicator, REORDER.srcRow);
+                        indicator.style.display = 'block';
+                        return true;
+                    }
+                } catch (eS) {}
+                return false;
+            };
 
             function getButtonsInOrder() {
                 return Array.prototype.slice.call(container.querySelectorAll('.ps-btn'));
             }
 
+            /* ★ 拖【文件夹】时的落点预览：把蓝框插到目标 .folder-sec 的前面 / 后面。
+               蓝框是普通流里的 22px 矩形 —— 它会把目标那一块【整体推开】，
+               所以"会落在哪"一眼就能看到。
+               （原来还有一句 head.style.outline = '1px solid #4da6ff'：
+                 outline 不占位、直接画在文件夹行【身上】，看起来就是"蓝框压在文件夹上"，
+                 而且它永远配合"插到目标上方"，上下不分 —— 落点自然是错的。已去掉。） */
+            REORDER.placeFolderInd = function (sec, before) {
+                try {
+                    /* ★ 蓝框和"半区高亮"是两种提示，同时出现会打架 —— 画蓝框前先清高亮 */
+                    try { if (REORDER.hideFolderHalf) REORDER.hideFolderHalf(); } catch (eHL) {}
+                    if (indicator.parentNode) indicator.parentNode.removeChild(indicator);
+                    if (before) {
+                        container.insertBefore(indicator, sec);
+                    } else {
+                        var nx = sec.nextSibling;
+                        /* 跳过可能残留的旧蓝框，免得两个叠在一起 */
+                        while (nx && nx.nodeType === 1 && nx.classList &&
+                               nx.classList.contains('drop-indicator')) nx = nx.nextSibling;
+                        container.insertBefore(indicator, nx || null);
+                    }
+                    indicator.style.display = 'block';
+                } catch (ePF) {}
+            };
+
+            /* ★ 某个文件夹在扁平列表里的【最后】一条脚本。
+               拖拽时"落到文件夹内部"要等同于"放到该文件夹下方"，就得靠它当落点。 */
+            REORDER.lastFileOf = function (folder) {
+                try {
+                    var list = files || [];
+                    var out = null;
+                    for (var i = 0; i < list.length; i++) {
+                        if (folderOfPath(list[i]) === folder) out = list[i];
+                    }
+                    return out;
+                } catch (eLF) { return null; }
+            };
+
+            /* ★ 某个文件夹的区块元素（.folder-sec）——用来把蓝框画到它下方 */
+            REORDER.sectionOf = function (folder) {
+                try {
+                    /* ★ 拖拽期间缓存：这个函数每次 dragover 都会被调用（showHalfFor / 落点判定），
+                       而 querySelectorAll 是整棵子树查询 —— 缓存掉省一次遍历。
+                       缓存按"每次重绘"重置（loadButtons 里会清），所以不会过期。 */
+                    if (!REORDER.secCache) REORDER.secCache = {};
+                    var hit = REORDER.secCache[folder];
+                    if (hit && hit.parentNode) return hit;
+                    var secs = container.querySelectorAll('.folder-sec');
+                    for (var i = 0; i < secs.length; i++) {
+                        var hr = secs[i].querySelector('.folder-row');
+                        if (hr && (hr.getAttribute('data-folder') || '') === folder) {
+                            REORDER.secCache[folder] = secs[i];
+                            return secs[i];
+                        }
+                    }
+                } catch (eSO) {}
+                return null;
+            };
+
+            /* ★★ "落在文件夹内部 = 放到该文件夹下方"的统一处理 ★★
+               把蓝框画到那个文件夹区块的下面，让预览和真实落点一致。
+               返回 true 表示已经处理（调用方就不用再画蓝框了）。 */
+            REORDER.showInsideAsBelow = function (folder) {
+                try {
+                    var secEl = REORDER.sectionOf(folder);
+                    if (!secEl) return false;
+                    REORDER.placeFolderInd(secEl, false);
+                    return true;
+                } catch (eSB) { return false; }
+            };
+
+            /* ★ 某个文件夹在扁平列表里的【第一条】脚本（放到"该文件夹上方"时用它当落点） */
+            REORDER.firstFileOf = function (folder) {
+                try {
+                    var list = files || [];
+                    for (var i = 0; i < list.length; i++) {
+                        if (folderOfPath(list[i]) === folder) return list[i];
+                    }
+                } catch (eFF) {}
+                return null;
+            };
+
+
+            /* ★★★ 冻结"文件夹区块的几何"（拖拽开始时拍一份快照）★★★
+               为什么必须冻结：落点提示（蓝框）是【普通流】里的 22px 矩形，
+               插进去会把下面的内容推走 26px —— 于是"光标下面到底是哪一行、哪个文件夹"
+               每一帧都在变，判定跟着变、蓝框跟着挪、布局又跟着变 …… 就是疯狂闪烁。
+               冻结之后：判定只依赖「光标位置 + 这份冻结坐标」，是个纯函数，
+               无论布局怎么被蓝框推，结论都不会来回跳。
+               坐标存的是【内容坐标】（rect + 当前滚动量），所以拖拽中自动滚动也不会失效。 */
+            REORDER.scrollTopNow = function () {
+                try {
+                    var sp = window.__psjsxScrollParent;
+                    if (!sp || !sp.parentNode) {
+                        try { sp = scrollParent(container); } catch (e1) {}
+                        window.__psjsxScrollParent = sp;
+                    }
+                    return (sp && sp.scrollTop) || 0;
+                } catch (e) { return 0; }
+            };
+            REORDER.freezeGeo = function () {
+                try {
+                    var st = REORDER.scrollTopNow();
+                    var list = [];
+                    var secs = container.querySelectorAll('.folder-sec');
+                    for (var i = 0; i < secs.length; i++) {
+                        var hr = secs[i].querySelector('.folder-row');
+                        var r = secs[i].getBoundingClientRect();
+                        list.push({
+                            el: secs[i],
+                            folder: hr ? (hr.getAttribute('data-folder') || '') : '',
+                            top: r.top + st,
+                            bottom: r.bottom + st,
+                            mid: r.top + st + r.height / 2
+                        });
+                    }
+                    REORDER.geo = { folders: list };
+                } catch (e) { REORDER.geo = null; }
+            };
+            /* 光标落在哪个文件夹区块里（用冻结坐标 + 当前滚动量换算成内容坐标来比） */
+            REORDER.folderAtY = function (clientY) {
+                try {
+                    var g = REORDER.geo;
+                    if (!g || !g.folders.length) return null;
+                    var y = clientY + REORDER.scrollTopNow();
+                    for (var i = 0; i < g.folders.length; i++) {
+                        var f = g.folders[i];
+                        if (y >= f.top && y < f.bottom) return f;
+                    }
+                } catch (e) {}
+                return null;
+            };
+
+            /* ★★ 拖进文件夹【内部】时的"分界线 + 半区高亮" ★★
+               规则：以【该文件夹整块的中线】为界 ——
+                 中线【以上】 -> 放到该文件夹【上方】
+                 中线【以下】 -> 放到该文件夹【下方】
+               高亮层是绝对定位的覆盖层，画在 .folder-sec 上（它已是 position:relative），
+               它的边框就是那条分界线。 */
+            REORDER.hideFolderHalf = function () {
+                try {
+                    /* ★ 快速返回：本来就没有高亮时直接走人。
+                       这个函数会被 hideIndicator() 连带调用，拖拽时一秒可能几十次，
+                       没必要每次都做 querySelector。 */
+                    if (!REORDER.halfEl && !document.querySelector('.folder-half-hl')) {
+                        REORDER.halfEl = null;
+                        return;
+                    }
+                    var el = REORDER.halfEl || document.querySelector('.folder-half-hl');
+                    while (el && el.parentNode) {
+                        try { el.parentNode.removeChild(el); } catch (eR) { break; }
+                        el = document.querySelector('.folder-half-hl');
+                    }
+                    REORDER.halfEl = null;
+                } catch (eHH) {}
+            };
+            REORDER.showFolderHalf = function (secEl, topHalf) {
+                try {
+                    if (!secEl) return;
+                    REORDER.hideFolderHalf();
+                    var el = document.createElement('div');
+                    el.className = 'folder-half-hl ' + (topHalf ? 'top' : 'bottom');
+                    secEl.appendChild(el);
+                    REORDER.halfEl = el;
+                } catch (eSH) {}
+            };
+
+            /* ★★★ 统一的"落点预览"设置（解决疯狂闪烁）★★★
+               为什么需要它：dragover 触发极其频繁（鼠标每动一下 + 停住时也约 350ms 一次）。
+               原来每个事件都：删蓝框 -> getBoundingClientRect()（强制重排）-> 再插蓝框 ->
+               删高亮 -> 建高亮 -> 插高亮。蓝框是【普通流】里的 22px 矩形，
+               一删一插就等于整列上下跳 26px，配合强制重排 -> 浏览器真的会画出那一帧，
+               看起来就是列表在疯狂闪烁。
+               现在：把"要显示成什么样"算成一个状态，只有状态【变了】才动 DOM。
+               状态没变 -> 直接 return，零 DOM 操作、零重排 -> 不可能再闪。
+
+               anchorEl : 蓝框插在它前面/后面（可以是 .folder-sec，也可以是某一行）
+               before   : true = 插在 anchorEl 前面
+               mode     : 'box'  = 只显示蓝框（拖到标题行/脚本行时）
+                          'both' = 蓝框 + 半区高亮（拖到文件夹内部时）
+               folder   : 半区高亮属于哪个文件夹（mode='both' 时用）         */
+            REORDER.setPreview = function (anchorEl, before, mode, folder) {
+                try {
+                    var same = (REORDER.pvAnchor === anchorEl &&
+                                REORDER.pvBefore === !!before &&
+                                REORDER.pvMode === mode &&
+                                REORDER.pvFolder === (folder || ''));
+                    if (same && indicator && indicator.parentNode) return;   /* ★ 状态没变：什么都不做 */
+                    REORDER.pvAnchor = anchorEl;
+                    REORDER.pvBefore = !!before;
+                    REORDER.pvMode = mode;
+                    REORDER.pvFolder = (folder || '');
+
+                    /* ---- 蓝框 ---- */
+                    if (anchorEl) {
+                        if (indicator.parentNode) indicator.parentNode.removeChild(indicator);
+                        if (before) {
+                            container.insertBefore(indicator, anchorEl);
+                        } else {
+                            var nx = anchorEl.nextSibling;
+                            while (nx && nx.nodeType === 1 && nx.classList &&
+                                   nx.classList.contains('drop-indicator')) nx = nx.nextSibling;
+                            container.insertBefore(indicator, nx || null);
+                        }
+                        indicator.style.display = 'block';
+                    } else {
+                        if (indicator.parentNode) indicator.parentNode.removeChild(indicator);
+                        indicator.style.display = 'none';
+                    }
+
+                    /* ---- 半区高亮（只有 mode='both' 才要）---- */
+                    if (mode === 'both' && anchorEl && REORDER.sectionOf &&
+                        REORDER.sectionOf(folder) === anchorEl) {
+                        if (!(REORDER.halfEl && REORDER.halfSec === anchorEl && REORDER.halfTop === !!before)) {
+                            REORDER.hideFolderHalf();
+                            var el = document.createElement('div');
+                            el.className = 'folder-half-hl ' + (before ? 'top' : 'bottom');
+                            anchorEl.appendChild(el);
+                            REORDER.halfEl = el;
+                            REORDER.halfSec = anchorEl;
+                            REORDER.halfTop = !!before;
+                        }
+                    } else {
+                        REORDER.hideFolderHalf();
+                    }
+                } catch (ePV) {}
+            };
+
+            /* 拖到某个文件夹内部：按中线判断上/下半区，并且【两个提示都给】：
+                 · 蓝框 = 具体落点（上半区 -> 该文件夹【之前】；下半区 -> 该文件夹【之后】）
+                 · 半区高亮 + 中线 = 直观表示"线以上 / 线以下"
+               ★ 测量前必须先把两个提示都收起来：蓝框是普通流里的 22px 矩形、会占位，
+                 不收起来的话"中线"的基准会被它自己挤动 —— 落点显示错位，还会来回抖。
+                 （这和脚本行那边是同一个道理，文件里原来也有注释提过。） */
+            REORDER.showHalfFor = function (folder, clientY) {
+                try {
+                    /* ★★ 判定只依赖「光标位置 + 拖拽开始时冻结的几何」★★
+                       不再看"此刻光标落在哪一行" —— 蓝框会把布局推来推去，
+                       按当前布局判定就会在两块之间反复横跳（那就是疯狂闪烁）。 */
+                    var st = REORDER.scrollTopNow();
+                    var f = REORDER.folderAtY(clientY);
+                    if (!f) return;
+                    var topHalf = ((clientY + st) < f.mid);
+                    REORDER.setPreview(f.el, topHalf, 'both', f.folder);
+                } catch (eSF) {}
+            };
+
             function insertIndicatorBefore(refBtn) {
-                container.insertBefore(indicator, refBtn);
+                refBtn.parentNode.insertBefore(indicator, refBtn);
                 indicator.style.display = 'block';
             }
 
             function insertIndicatorAfter(refBtn) {
                 var next = refBtn.nextSibling;
                 if (next && next === indicator) return;
-                container.insertBefore(indicator, next || null);
+                (next ? next.parentNode : refBtn.parentNode).insertBefore(indicator, next || null);
                 indicator.style.display = 'block';
             }
 
-            function hideIndicator() {
+            // 取脚本所属文件夹（没有 "/" 就是顶层）
+    function folderOf(f) {
+        var i = f.lastIndexOf('/');
+        return (i === -1) ? '' : f.substring(0, i);
+    }
+
+    function hideIndicator() {
                 indicator.style.display = 'none';
                 if (indicator.parentNode) indicator.parentNode.removeChild(indicator);
+                /* ★ 半区高亮也跟着一起清掉，免得两个提示打架 / 残留在界面上 */
+                try { if (REORDER.hideFolderHalf) REORDER.hideFolderHalf(); } catch (eHF) {}
+                /* ★ 复位"预览状态"缓存：清了之后再 setPreview 才会真的重画 */
+                try { REORDER.pvAnchor = null; REORDER.pvFolder = ''; REORDER.pvMode = ''; } catch (ePVR) {}
             }
 
             files.forEach(function (file) {
@@ -435,7 +1158,7 @@
 
                 var btn = document.createElement('button');
                 btn.className = 'ps-btn';
-                btn.textContent = file.replace(/\.jsx$/i, '');
+                btn.textContent = file.replace(/\.jsx$/i, '').split('/').pop();
                 var fullPath = path.join(scriptsDir, file).replace(/\\/g, '/');
 
                 btn.addEventListener('click', function () {
@@ -444,6 +1167,7 @@
                 });
 
                 var hotTag = document.createElement('span');
+                hotTag.style.display = 'none';        // ★ 快捷键功能已移除
                 hotTag.className = 'hotkey-tag';
                 hotTag.title = '点击绑定快捷键，再次点击清除';
                 hotTag.textContent = hotkeyLabel(file);
@@ -481,15 +1205,40 @@
                         e.preventDefault();
                         return;
                     }
+                    /* ★ 同样拍一份几何快照（拖脚本时"落到文件夹内部"也用它判定） */
+                    try { if (REORDER.freezeGeo) REORDER.freezeGeo(); } catch (eFG2) {}
                     dragSrcFile = file;
+                    REORDER.srcRow = row;                  // 记住原位置（落点无效时把蓝框画回这里）
                     row.classList.add('dragging');
+                    // ★ 延迟一帧再隐藏源条目：立刻隐藏会让浏览器中止拖拽；
+                    //   延迟后隐藏 → 原位置不留空档，蓝矩形可以占据任何位置（含原位置）
+                    setTimeout(function () {
+                        try { if (row.parentNode) row.style.display = 'none'; } catch (eH) {}
+                    }, 0);
+                    // 蓝矩形上显示被拖脚本的名字（去掉文件夹前缀与 .jsx）
+                    try {
+                        indicator.textContent = file.replace(/\.jsx$/i, '').split('/').pop();
+                    } catch (eT) {}
                     e.dataTransfer.effectAllowed = 'move';
                     e.dataTransfer.setData('text/plain', file);
+                });
+
+                row.addEventListener('drop', function (e) {
+                    // 拖"文件夹整块"落到这一行：按鼠标坐标决定前/后，直接搬（不依赖蓝框位置）
+                    if (!folderDragSrc) return;
+                    if (folderOf(file) !== '') return;
+                    e.preventDefault();
+                    e.stopPropagation();
+                    var rr = row.getBoundingClientRect();
+                    var beforeRow = (e.clientY < rr.top + rr.height / 2);
+                    try { REORDER.hideInd(); } catch (eHd) {}
+                    if (REORDER.moveBlockTo) REORDER.moveBlockTo(folderDragSrc, file, beforeRow);
                 });
 
                 row.addEventListener('dragend', function () {
                     allowDrag = false;
                     row.classList.remove('dragging');
+                    try { row.style.display = ''; } catch (eR2) {}   // 恢复显示（后续 loadButtons 会重建）
                     hideIndicator();
                 });
 
@@ -497,53 +1246,369 @@
                     e.preventDefault();
                     e.dataTransfer.dropEffect = 'move';
                     if (file === dragSrcFile) return;
+
+                    // 情况一：正在拖"文件夹整块"
+                    if (folderDragSrc) {
+                        if (folderOf(file) !== '') {
+                            /* ★ 落在文件夹【内部】= 以"该文件夹整块的中线"为分界线：
+                               中线以上 -> 放到该文件夹【上方】；中线以下 -> 放到该文件夹【下方】，
+                               并高亮对应半区（高亮层的边框就是那条分界线）。 */
+                            REORDER.showHalfFor(folderOf(file), e.clientY);
+                            return;
+                        }
+                        e.dataTransfer.dropEffect = 'move';
+                        var r2 = row.getBoundingClientRect();
+                        try { if (REORDER.setPreview) REORDER.setPreview(row, (e.clientY < r2.top + r2.height / 2), 'box', ''); } catch (ePV2) {}
+                        return;
+                    }
+
+                    // 情况二：拖脚本
+                    var __srcF = folderOf(dragSrcFile);
+                    var __dstF = folderOf(file);
+                    if (__dstF !== __srcF) {
+                        if (__srcF === '') {
+                            /* ★ 顶层脚本落到某个文件夹【内部】= 同样按中线分上下并高亮半区 */
+                            REORDER.showHalfFor(__dstF, e.clientY);
+                            return;
+                        }
+                        /* 文件夹里的脚本不能跨文件夹：面板只改"显示顺序"，不会挪磁盘上的文件，
+                           硬挪的话下一次重绘又会把它归回自己文件夹，看起来像没反应。 */
+                        showAtSource();
+                        return;
+                    }
+                    // 同一个文件夹内：按行的上 / 下半区
+                    // ★ 先收起示意块（它是 22px 高的矩形，会占位）再测量行位置，
+                    //   否则"上半区/下半区"的基准会被它自己挤动 → 落点和显示错位
                     var rect = row.getBoundingClientRect();
                     var mid = rect.top + rect.height / 2;
-                    if (e.clientY < mid) {
-                        insertIndicatorBefore(row);
-                    } else {
-                        insertIndicatorAfter(row);
-                    }
+                    try { if (REORDER.setPreview) REORDER.setPreview(row, (e.clientY < mid), 'box', ''); } catch (ePV3) {}
                 });
 
                 row.appendChild(btn);
                 row.appendChild(hotTag);
                 row.appendChild(handle);
-                container.appendChild(row);
+                sectionFor(container, file).appendChild(row);
             });
 
-            container.addEventListener('dragover', function(e) {
-                e.preventDefault();
-            });
+            function showAtSource() {
+                if (REORDER.showAtSource) { REORDER.showAtSource(); }
+            }
 
-            container.addEventListener('drop', function(e) {
-                e.preventDefault();
-                if (!dragSrcFile) return;
-                if (indicator.style.display === 'none' || !indicator.parentNode) return;
+            // 拖拽结束的兜底处理（函数每次重绘更新；监听本身只在下面装一次）
+            window.__psjsxDragEnd = function () {
+                try { hideIndicator(); } catch (eD1) {}
+                dragSrcFile = null;
+                folderDragSrc = null;
+                folderDropBefore = true;
+                /* ★ 停掉自动滚动，并清掉缓存的滚动容器（下次拖拽重新找） */
+                try { if (window.__psjsxStopAutoScroll) window.__psjsxStopAutoScroll(); } catch (eAS2) {}
+                try { window.__psjsxScrollParent = null; window.__psjsxViewH = 0; } catch (eAS3) {}
+                /* ★ 清掉半区高亮 */
+                try { if (REORDER.hideFolderHalf) REORDER.hideFolderHalf(); } catch (eHF2) {}
+                /* ★ 自愈：把拖拽可能留下的 display:none / 变暗 / 描边全部清掉。
+                   这是"文件夹拖完就消失、刷新才回来"的兜底修复。 */
+                try { if (window.__psjsxHealRows) window.__psjsxHealRows(); } catch (eH5) {}
+            };
 
-                var nextRow = null;
-                var sibling = indicator.nextSibling;
-                while (sibling) {
-                    if (sibling.classList && sibling.classList.contains('btn-row')) {
-                        nextRow = sibling;
-                        break;
+            /* ★★★ 拖拽收尾的"自愈"（只定义一次）★★★
+               为什么必须要有：只要这次拖拽【没有触发重绘】，dragstart 里给行设的
+               display / opacity / outline 就会留在界面上 ——
+                 · 文件夹标题被设成 display:none -> 整个文件夹"消失"，刷新才回来
+                 · 脚本行被设成 display:none      -> 那个按钮"消失"
+                 · 透明度 / 描边残留             -> 看起来变暗、像被选中
+               拖拽结束（dragend / mouseup）时统一扫一遍恢复，双保险。 */
+            window.__psjsxHealRows = function () {
+                try {
+                    var fs2 = document.querySelectorAll('.folder-row');
+                    for (var __i = 0; __i < fs2.length; __i++) {
+                        try {
+                            fs2[__i].style.opacity = '';
+                            fs2[__i].style.outline = '';
+                            fs2[__i].style.display = 'flex';
+                            fs2[__i].__psjsxHidden = false;
+                        } catch (eH1) {}
                     }
-                    sibling = sibling.nextSibling;
+                } catch (eH2) {}
+                try {
+                    var bs = document.querySelectorAll('.btn-row');
+                    for (var __j = 0; __j < bs.length; __j++) {
+                        try {
+                            bs[__j].style.display = '';
+                            bs[__j].style.opacity = '';
+                            bs[__j].classList.remove('dragging');
+                        } catch (eH3) {}
+                    }
+                } catch (eH4) {}
+            };
+
+
+
+            /* ★★ 拖拽到面板【上/下边缘】时自动滚动 ★★
+               用定时器（而不是只靠 dragover）—— 鼠标停在边缘不动时 dragover 触发很慢，
+               看起来就是"滚不动"。这里 16ms 一步，速度按离边缘的远近线性加快。 */
+            window.__psjsxAutoScroll = function (clientY) {
+                try {
+                    /* ★ 滚动容器 / 视口高度都缓存起来：
+                       scrollParent() 内部要一路 getComputedStyle()，是每次 dragover 都跑的话，
+                       光是"样式解析"就能让面板一直重绘。拖拽期间 DOM 不会重建，缓存是安全的。 */
+                    var sp = window.__psjsxScrollParent;
+                    if (!sp || !sp.parentNode) {
+                        sp = scrollParent(container);
+                        window.__psjsxScrollParent = sp;
+                        window.__psjsxViewH = window.innerHeight || document.documentElement.clientHeight || 600;
+                    }
+                    if (!sp) { window.__psjsxStopAutoScroll(); return; }
+                    var edge = 46;
+                    var vh = window.__psjsxViewH || 600;
+                    var speed = 0;
+                    if (clientY < edge) {
+                        speed = -Math.max(4, Math.round((edge - clientY) / 4));
+                    } else if (clientY > vh - edge) {
+                        speed = Math.max(4, Math.round((clientY - (vh - edge)) / 4));
+                    }
+                    if (speed === 0) {
+                        /* ★ 只有真的在滚的时候才去停：原来是每帧都调 clearInterval，纯属白折腾 */
+                        if (window.__psjsxScrollTimer) window.__psjsxStopAutoScroll();
+                        return;
+                    }
+                    window.__psjsxScrollTarget = sp;
+                    window.__psjsxScrollSpeed = speed;
+                    if (window.__psjsxScrollTimer) return;         /* 已经在滚了 */
+                    window.__psjsxScrollTimer = setInterval(function () {
+                        try {
+                            var t = window.__psjsxScrollTarget;
+                            if (!t) return;
+                            var before = t.scrollTop;
+                            t.scrollTop = before + (window.__psjsxScrollSpeed || 0);
+                            /* 滚到头了就别空转 */
+                            if (t.scrollTop === before) { /* 到底/到顶，停掉 */ }
+                        } catch (eS) {}
+                    }, 16);
+                } catch (eAS) {}
+            };
+            window.__psjsxStopAutoScroll = function () {
+                try {
+                    if (window.__psjsxScrollTimer) {
+                        clearInterval(window.__psjsxScrollTimer);
+                        window.__psjsxScrollTimer = null;
+                    }
+                    window.__psjsxScrollSpeed = 0;
+                } catch (eSS) {}
+            };
+
+            // ★ 容器级/文档级监听只装一次（重复安装 = 每次重绘多一层监听 = 蓝框越拖越多）
+            if (!container._dragWired) {
+                container._dragWired = true;
+                container.addEventListener('dragover', function (e) {
+                    e.preventDefault();
+                    /* ★ 触到上/下边缘就滚面板 */
+                    try { if (window.__psjsxAutoScroll) window.__psjsxAutoScroll(e.clientY); } catch (eAS) {}
+                    if (window.__psjsxContainerDragOver) window.__psjsxContainerDragOver(e);
+                });
+                container.addEventListener('drop', function (e) {
+                    if (window.__psjsxContainerDrop) window.__psjsxContainerDrop(e);
+                });
+                document.addEventListener('dragend', function () {
+                    if (window.__psjsxDragEnd) window.__psjsxDragEnd();
+                });
+                document.addEventListener('mouseup', function () {
+                    if (window.__psjsxDragEnd) window.__psjsxDragEnd();
+                });
+            }
+
+            window.__psjsxContainerDragOver = function (e) {
+                /* ★★★ 落点预览统一在这里处理（整块文件夹区域一套规则）★★★
+                   判定只用「光标位置 + 拖拽开始时冻结的几何」（REORDER.folderAtY），
+                   所以光标压在【标题行 / 标题与第一条脚本之间的空隙 / 脚本行】上，
+                   结论完全一样 —— 边界上来回压也不会跳。
+                   ★ 顺带把 document.elementFromPoint() 彻底去掉了：
+                     它会强制布局 + 命中测试，是 dragover 里最贵的一步。
+                     现在这个函数里只读缓存过的滚动量和一个数组，零重排。 */
+                var isFolderDrag = !!folderDragSrc;
+                var isLooseScript = (!folderDragSrc && dragSrcFile && folderOf(dragSrcFile) === '');
+                if (isFolderDrag || isLooseScript) {
+                    var fHit = null;
+                    try { fHit = REORDER.folderAtY ? REORDER.folderAtY(e.clientY) : null; } catch (eFA) {}
+                    if (fHit) {
+                        e.preventDefault();
+                        try {
+                            var stN = REORDER.scrollTopNow ? REORDER.scrollTopNow() : 0;
+                            REORDER.setPreview(fHit.el, ((e.clientY + stN) < fHit.mid), 'both', fHit.folder);
+                        } catch (eSPn) {}
+                        return;
+                    }
+                }
+                if (!dragSrcFile) return;
+                /* 文件夹里的脚本：悬停到别的文件夹上 -> 明确不给预览（它不能跨文件夹） */
+                var fOther = null;
+                try { fOther = REORDER.folderAtY ? REORDER.folderAtY(e.clientY) : null; } catch (eFB) {}
+                if (fOther) { hideIndicator(); return; }
+                /* 其余（顶层脚本落到顶层脚本行）由行自己的 dragover 处理，这里不用管 */
+            };
+
+            window.__psjsxContainerDrop = function (e) {
+                e.preventDefault();
+                if (!dragSrcFile && !folderDragSrc) return;
+
+                /* ★★★ 落点判定必须和"预览"用同一套 ★★★
+                   预览是用「光标位置 + 拖拽开始时冻结的几何」算的，这里也必须用同一套，
+                   否则会出现"蓝框明明显示在上面，松手却落在下面"。
+                   原来这里用的是【实时布局】，而且还先 hideIndicator() 改了布局再量 ——
+                   和预览那份冻结数据必然对不上。 */
+                var fDrop = null;
+                try { if (REORDER.folderAtY) fDrop = REORDER.folderAtY(e.clientY); } catch (eFD) {}
+                var fDropTop = false;
+                if (fDrop) {
+                    try {
+                        var stD = REORDER.scrollTopNow ? REORDER.scrollTopNow() : 0;
+                        fDropTop = ((e.clientY + stD) < fDrop.mid);
+                    } catch (eFD2) {}
                 }
 
-                var srcIdx = files.indexOf(dragSrcFile);
-                files.splice(srcIdx, 1);
-
-                if (!nextRow) {
-                    files.push(dragSrcFile);
-                } else {
-                    var dstIdx = files.indexOf(nextRow.title);
-                    files.splice(dstIdx, 0, dragSrcFile);
+                // ① 按鼠标 Y 找最近的落点：脚本行 → 直接定位；文件夹标题行 → 放到该文件夹上方
+                var cands = [];
+                var rowsA = container.querySelectorAll('.btn-row');
+                for (var i = 0; i < rowsA.length; i++) {
+                    cands.push({ el: rowsA[i], rel: rowsA[i].title, isHead: false });
+                }
+                var rowsB = container.querySelectorAll('.folder-row');
+                for (var j = 0; j < rowsB.length; j++) {
+                    var secB = rowsB[j].parentNode;
+                    var bodyB = secB ? secB.querySelector('.sec-body') : null;
+                    var firstB = bodyB ? bodyB.querySelector('.btn-row') : null;
+                    cands.push({ el: rowsB[j], rel: firstB ? firstB.title : null, isHead: true });
                 }
 
-                saveOrder(files);
-                loadButtons();
-            });
+                /* ★ 先把提示收起来再量位置：蓝框（22px 普通流矩形）留着会占位，
+                   量出来的行位置/中线都会被它挤偏 -> 落点选错。 */
+                try { hideIndicator(); } catch (eH00) {}
+                var best = null, bestBefore = true, bestDist = 1e9;
+                for (var k = 0; k < cands.length; k++) {
+                    var c = cands[k];
+                    if (!c.rel) continue;
+                    var r = c.el.getBoundingClientRect();
+                    var mid = r.top + r.height / 2;
+                    var d = Math.abs(e.clientY - mid);
+                    if (d < bestDist) {
+                        bestDist = d;
+                        best = c;
+                        /* 落在文件夹标题行上时：
+                            拖【脚本】-> 一律放到该文件夹上方（保持原行为）
+                            拖【文件夹】-> 按鼠标在标题行的上半/下半区决定前/后
+                                          （和蓝框预览保持一致，不然又会对不上） */
+                        if (c.isHead) bestBefore = folderDragSrc ? (e.clientY < mid) : true;
+                        else bestBefore = (e.clientY < mid);
+                    }
+                }
+
+
+                try { hideIndicator(); } catch (eH0) {}
+
+                // ② 拖"文件夹整块"
+                if (folderDragSrc) {
+                    var blk = folderDragSrc;
+                    folderDragSrc = null;
+                    folderDropBefore = true;
+                    /* ★ 首选：按冻结几何判定（和预览完全一致） */
+                    if (fDrop) {
+                        var __relD = null;
+                        try {
+                            __relD = fDropTop
+                                ? (REORDER.firstFileOf ? REORDER.firstFileOf(fDrop.folder) : null)
+                                : (REORDER.lastFileOf ? REORDER.lastFileOf(fDrop.folder) : null);
+                        } catch (eRD) {}
+                        if (__relD && REORDER.moveBlockTo) {
+                            try { hideIndicator(); } catch (eHD1) {}
+                            REORDER.moveBlockTo(blk, __relD, fDropTop);
+                            return;
+                        }
+                    }
+                    if (!best) { try { loadButtons(); } catch (eLB0) {} return; }
+                    /* ★ 落点落在某个文件夹【内部】-> 等同于放到那个文件夹【下方】：
+                       把目标换成"该文件夹的最后一条脚本"，并且插在它后面。 */
+                    /* ★ 落点在文件夹内部 -> 以该文件夹整块的【中线】为分界线：
+                       线上放到该文件夹上方（用它的第一条脚本当前锚点），
+                       线下放到该文件夹下方（用它的最后一条脚本当前锚点）。 */
+                    var __tRel = best.rel, __tBefore = bestBefore;
+                    if (!best.isHead && folderOf(best.rel) !== '') {
+                        var __fld = folderOf(best.rel);
+                        var __ff2 = REORDER.firstFileOf ? REORDER.firstFileOf(__fld) : null;
+                        var __lf2 = REORDER.lastFileOf ? REORDER.lastFileOf(__fld) : null;
+                        var __topHalf = true;
+                        try {
+                            var __secT = REORDER.sectionOf ? REORDER.sectionOf(__fld) : null;
+                            if (__secT) {
+                                var __sr = __secT.getBoundingClientRect();
+                                __topHalf = (e.clientY < __sr.top + __sr.height / 2);
+                            }
+                        } catch (eSR) {}
+                        if (__topHalf && __ff2) { __tRel = __ff2; __tBefore = true; }
+                        else if (__lf2) { __tRel = __lf2; __tBefore = false; }
+                    }
+                    if (REORDER.moveBlockTo) REORDER.moveBlockTo(blk, __tRel, __tBefore);
+                    else { try { loadButtons(); } catch (eLB1) {} }
+                    return;
+                }
+
+                // ③ 拖脚本
+                if (!dragSrcFile) return;
+                /* ★ 首选：按冻结几何判定（和预览完全一致）
+                   · 顶层脚本落到文件夹内部 -> 放到该文件夹上方/下方
+                   · 文件夹里的脚本落到别的文件夹内部 -> 不动（不能跨文件夹） */
+                if (fDrop) {
+                    var __srcFd = folderOf(dragSrcFile);
+                    if (__srcFd === '') {
+                        var __relS = null;
+                        try {
+                            __relS = fDropTop
+                                ? (REORDER.firstFileOf ? REORDER.firstFileOf(fDrop.folder) : null)
+                                : (REORDER.lastFileOf ? REORDER.lastFileOf(fDrop.folder) : null);
+                        } catch (eRS) {}
+                        if (__relS && moveItem(files, dragSrcFile, __relS, fDropTop)) {
+                            try { hideIndicator(); } catch (eHD2) {}
+                            saveOrder(files);
+                            loadButtons();
+                            return;
+                        }
+                    } else {
+                        try { hideIndicator(); } catch (eHD3) {}
+                        return;
+                    }
+                }
+                if (!best) { try { showAtSource(); } catch (eS0) {} return; }
+                /* ★ 落点落在某个文件夹【内部】-> 等同于放到那个文件夹【下方】。
+                   做法：目标换成"该文件夹的最后一条脚本"，并且插在它后面。 */
+                /* ★ 落点在文件夹内部 -> 同样按该文件夹整块的中线分上下 */
+                var __sRel = best.rel, __sBefore = bestBefore;
+                if (!best.isHead && folderOf(best.rel) !== '') {
+                    var __fld2 = folderOf(best.rel);
+                    var __ff3 = REORDER.firstFileOf ? REORDER.firstFileOf(__fld2) : null;
+                    var __lf = REORDER.lastFileOf ? REORDER.lastFileOf(__fld2) : null;
+                    var __topHalf2 = true;
+                    try {
+                        var __secT2 = REORDER.sectionOf ? REORDER.sectionOf(__fld2) : null;
+                        if (__secT2) {
+                            var __sr2 = __secT2.getBoundingClientRect();
+                            __topHalf2 = (e.clientY < __sr2.top + __sr2.height / 2);
+                        }
+                    } catch (eSR2) {}
+                    if (__topHalf2 && __ff3) { __sRel = __ff3; __sBefore = true; }
+                    else if (__lf) { __sRel = __lf; __sBefore = false; }
+                }
+                var __srcFolder = folderOf(dragSrcFile);
+                var __dstFolder = folderOf(__sRel);
+                /* 文件夹里的脚本只能在自己文件夹内重排；
+                   顶层脚本可以落到任何位置（包括"某个文件夹下方"）。 */
+                if (__srcFolder !== '' && __srcFolder !== __dstFolder) {
+                    try { showAtSource(); } catch (eS2) {}
+                    return;
+                }
+                if (moveItem(files, dragSrcFile, __sRel, __sBefore)) {
+                    saveOrder(files);
+                    loadButtons();
+                }
+                return;
+            };
         }
 
         loadButtons();
