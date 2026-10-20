@@ -43,6 +43,20 @@
         width: 0;
     }
 
+    /* ★★★ 永远预留纵向滚动条的位置 ★★★
+       现象：展开文件夹后内容变高 -> 纵向滚动条才出现 -> 它占掉 10px，
+             于是里面的文件夹行/脚本行整体向左缩了一下，行宽在"展开"那一刻变了。
+       做法：给根元素强制 overflow-y: scroll —— 不管内容多高，滚动条位置都一直占着
+             （滚动条宽度在下面 ::-webkit-scrollbar 里定的是 10px），
+             所以展开/收起文件夹时行宽完全不变。
+             scrollbar-gutter: stable 是新引擎的等价写法，双保险。
+       overflow-x: hidden 防止因为 1px 溢出冒出横向滚动条。 */
+    html {
+        overflow-x: hidden;
+        overflow-y: scroll;
+        scrollbar-gutter: stable;
+    }
+
     body.app {
         background: #535353;
         padding: 6px 8px;
@@ -110,12 +124,17 @@
     .drag-handle::before {
         content: '';
         display: block;
-        width: 8px;
-        height: 10px;
-        background-image: radial-gradient(circle, #777 1.5px, transparent 1.5px);
+        /* ★ 一列三个圆点竖排，尺寸已缩小（原来 15px 高，占按钮 22px 的 68%，太大）：
+             width  4px  -> 只留一列
+             height 12px -> 12 / 4 = 正好 3 个（占按钮高度的 55%）
+             size   4×4  -> 点间距 4px，点半径 1.3px -> 相邻点之间约 1.4px 间隙
+             repeat repeat-y -> 只往竖直方向重复 */
+        width: 4px;
+        height: 12px;
+        background-image: radial-gradient(circle, #8a8a8a 1.3px, transparent 1.4px);
         background-size: 4px 4px;
-        background-position: 1px 1px;
-        background-repeat: repeat;
+        background-position: 0 0;
+        background-repeat: repeat-y;
     }
 
     .drag-handle:hover {
@@ -123,7 +142,8 @@
     }
 
     .drag-handle:hover::before {
-        background-image: radial-gradient(circle, #aaa 1.5px, transparent 1.5px);
+        /* ★ 几何必须和上面完全一致（只改颜色），否则 hover 时点数/位置会变 */
+        background-image: radial-gradient(circle, #c0c0c0 1.3px, transparent 1.4px);
     }
 
     .drag-handle:active {
@@ -224,6 +244,7 @@
         <button class="icon-btn" id="open-folder-btn" title="打开 scripts 文件夹"><svg width="14" height="14" viewBox="0 0 24 24" style="vertical-align:-2px"><path d="M3 7.4A1.4 1.4 0 0 1 4.4 6h4.3c.5 0 .9.2 1.2.6l.9 1.1c.3.4.7.6 1.2.6h7.6A1.4 1.4 0 0 1 21 9.7v7.9A1.4 1.4 0 0 1 19.6 19H4.4A1.4 1.4 0 0 1 3 17.6V7.4z" fill="#6f6f6f" stroke="#bdbdbd" stroke-width="1.4" stroke-linejoin="round"/></svg></button>
         <button class="icon-btn" id="reload-btn" title="刷新脚本列表">&#8635;</button>
         <button class="icon-btn" id="refresh-panel-btn" title="重新打开面板（等于关掉扩展再打开，改完面板样式/逻辑后用）">&#10227;</button>
+        <button class="icon-btn" id="soft-reload-btn" title="热重载：从磁盘重新读 index.html 的样式和脚本（不关闭面板、不会白屏）">&#9851;</button>
     </div>
     </div>
     <div id="btn-container"></div>
@@ -344,24 +365,141 @@
             reloadPanelForReal();
         });
 
-        /* ★ 真正能刷新面板的做法：
-           CEP 面板把 index.html 缓存在内存里，
-           location.reload() / location.reload(true) 在这里拿到的还是旧的一份
-           （点了跟没点一样）。
-           标准做法是：给 URL 加一个变化的参数重新请求，
-           缓存键不同就会从磁盘重新读。
-           万一这个版本不支持带参数的 URL，就退回普通 reload。 */
+        document.getElementById('soft-reload-btn').addEventListener('click', function () {
+            softReloadPanel();
+        });
+
+        /* ★★★ 重载面板 = "就地重建"，绝对不用 location 导航 ★★★
+           原来的写法是 location.href = base + '?r=时间戳'：
+           在 CEP 里给 file:// 地址加 query 会让页面打不开 ——
+           面板直接变成【空白】，而且这个 ⟳ 按钮也跟着没了，
+           只能重启 PS 才能恢复（非常坑）。
+           现在改成：清掉所有临时状态 + 重新扫盘 + 重建列表。
+           效果等同于刷新，但页面不离开，永远不会白屏。
+
+           ⚠️ 这样刷不到 index.html 本身的改动（HTML 已经解析过了）：
+              改过 index.html 之后，请用：
+              窗口 > 扩展功能 > PS_jsx_loader（取消勾选再勾上），或重启 PS。 */
         function reloadPanelForReal() {
-            function go(url) {
-                try { location.href = url; return true; } catch (eN) { return false; }
-            }
+            var ok = false;
             try {
-                var base = String(location.href).split('#')[0].split('?')[0];
-                var url = base + '?r=' + (new Date()).getTime();
-                if (go(url)) return;
-            } catch (e1) {}
-            try { location.reload(); return; } catch (e2) {}
-            try { location.href = location.href; } catch (e3) {}
+                /* 1) 停掉可能还在跑的自动滚动 */
+                try { if (window.__psjsxStopAutoScroll) window.__psjsxStopAutoScroll(); } catch (e0) {}
+                /* 2) 清掉落点蓝框（普通流元素，留着会占位/看起来多一行） */
+                try {
+                    var __n = document.querySelectorAll('.drop-indicator');
+                    for (var __i = 0; __i < __n.length; __i++) {
+                        if (__n[__i].parentNode) __n[__i].parentNode.removeChild(__n[__i]);
+                    }
+                } catch (e1) {}
+                /* 3) 复位拖拽/预览的全部缓存状态。
+                      不清的话，重建后 setPreview 会因为"状态没变"而故意不重画。 */
+                if (typeof REORDER === 'object' && REORDER) {
+                    try { REORDER.hideFolderHalf(); } catch (e2) {}
+                    REORDER.prevAnchor = null;
+                    REORDER.pvAnchor = null;
+                    REORDER.pvBefore = null;
+                    REORDER.pvMode = '';
+                    REORDER.pvFolder = '';
+                    REORDER.geo = null;
+                    REORDER.secCache = {};
+                    REORDER.halfEl = null;
+                    REORDER.halfSec = null;
+                    REORDER.srcRow = null;
+                }
+                /* 4) 重新扫盘 + 重建列表
+                      （loadButtons 自己会清空容器、清残留、必要时装监听） */
+                loadButtons();
+                ok = true;
+            } catch (eR) { ok = false; }
+            /* 5) 给个视觉反馈：按钮上的 ⟳ 闪成 ✔，700ms 后还原 */
+            try {
+                var __b = document.getElementById('refresh-panel-btn');
+                if (__b) {
+                    var __old = __b.textContent;
+                    __b.textContent = '✔';
+                    setTimeout(function () { try { __b.textContent = __old; } catch (e3) {} }, 700);
+                }
+            } catch (e4) {}
+            /* ★ 这里绝对不调用 location.reload() / location.href = ... —— 那才是白屏的根源 */
+            return ok;
+        }
+
+        /* ★★★ 热重载：从磁盘重新读 index.html，把 <style> 和 inline <script> 就地替换 ★★★
+           用来加载"改过 index.html 之后"的新样式/新逻辑，而且【不导航、不关闭面板、不会白屏】。
+           原理：把文件读回来，抠出所有 <style> 块和内联 <script> 块，
+                 换掉页面上的样式，再注入一段新 <script> —— 它最后一行就是 loadButtons()，
+                 所以列表会自己重建。
+           注意：只同步【样式 + 脚本】。如果改的是 <body> 里的 HTML 结构（标签、新元素），
+                 这里不会重建 DOM —— 那种情况仍需重开面板。 */
+        function softReloadPanel() {
+            var ok = false, err = '';
+            try {
+                /* 1) 读磁盘上的 index.html */
+                var htmlPath = path.join(__dirname, 'index.html');
+                var raw = fs.readFileSync(htmlPath, 'utf8');
+
+                /* 2) 抠出所有 <style> 块 */
+                var cssBlocks = [], m = null;
+                var reStyle = /<style[^>]*>([\s\S]*?)<\/style>/gi;
+                while ((m = reStyle.exec(raw)) !== null) { cssBlocks.push(m[1]); }
+
+                /* 3) 抠出内联 <script>（跳过带 src 的，比如 csinterface.js） */
+                var jsBlocks = [];
+                var reScript = /<script(?![^>]*\bsrc\s*=)[^>]*>([\s\S]*?)<\/script>/gi;
+                while ((m = reScript.exec(raw)) !== null) { jsBlocks.push(m[1]); }
+                if (!jsBlocks.length) { throw new Error('index.html 里没找到内联 <script>'); }
+
+                /* 4) 先把工具栏按钮上的旧监听摘掉。
+                      否则重跑脚本会再绑一遍 -> 点一次触发两次（热重载自己也会叠）。 */
+                var ids = ['open-folder-btn', 'reload-btn', 'refresh-panel-btn', 'soft-reload-btn'];
+                for (var bi = 0; bi < ids.length; bi++) {
+                    var oldBtn = document.getElementById(ids[bi]);
+                    if (oldBtn && oldBtn.parentNode) {
+                        var fresh = oldBtn.cloneNode(true);
+                        oldBtn.parentNode.replaceChild(fresh, oldBtn);
+                    }
+                }
+
+                /* 5) 换样式：删掉页面上所有 <style>，把新的按顺序插进 <head> */
+                var olds = document.querySelectorAll('style');
+                for (var si = 0; si < olds.length; si++) {
+                    if (olds[si].parentNode) olds[si].parentNode.removeChild(olds[si]);
+                }
+                for (var ci = 0; ci < cssBlocks.length; ci++) {
+                    var st = document.createElement('style');
+                    st.textContent = cssBlocks[ci];
+                    document.head.appendChild(st);
+                }
+
+                /* 6) 清空列表容器：新脚本末尾的 loadButtons() 会重建它 */
+                var box = document.getElementById('btn-container');
+                if (box) box.innerHTML = '';
+
+                /* 7) 注入新的内联脚本（脚本元素插入后会自动执行，且在全局作用域） */
+                var sc = document.createElement('script');
+                sc.textContent = jsBlocks.join("\n");
+                document.body.appendChild(sc);
+
+                ok = true;
+            } catch (eSL) {
+                ok = false;
+                err = (eSL && eSL.message) ? eSL.message : String(eSL);
+            }
+            /* 反馈：成功 → ✔；失败 → ✖ 并把原因写进 title */
+            try {
+                var b2 = document.getElementById('soft-reload-btn');
+                if (b2) {
+                    var oldText = b2.innerHTML, oldTitle = b2.title;
+                    b2.innerHTML = ok ? '&#10004;' : '&#10008;';
+                    if (!ok) b2.title = '热重载失败: ' + err;
+                    setTimeout(function () {
+                        try { b2.innerHTML = oldText; b2.title = oldTitle; } catch (e5) {}
+                    }, 1200);
+                }
+            } catch (e6) {}
+            if (!ok) { try { console.log('[热重载失败] ' + err); } catch (e7) {} }
+            return ok;
         }
 
 
@@ -1069,16 +1207,22 @@
                     REORDER.pvMode = mode;
                     REORDER.pvFolder = (folder || '');
 
-                    /* ---- 蓝框 ---- */
-                    if (anchorEl) {
+                    /* ---- 蓝框 ----
+                       ★★★ 必须插到【锚点自己的父节点】里，不能一律用 container：
+                       脚本行是 .folder-sec > .sec-body 的子节点，不是 #btn-container 的！
+                       用 container.insertBefore(indicator, row) 会抛 NotFoundError，
+                       而这里外面有 try/catch -> 错误被静默吞掉 -> 蓝框完全不出现。
+                       （文件夹区块的父节点本身就是 container，所以两种锚点都适用。） */
+                    if (anchorEl && anchorEl.parentNode) {
+                        var __host = anchorEl.parentNode;
                         if (indicator.parentNode) indicator.parentNode.removeChild(indicator);
                         if (before) {
-                            container.insertBefore(indicator, anchorEl);
+                            __host.insertBefore(indicator, anchorEl);
                         } else {
                             var nx = anchorEl.nextSibling;
                             while (nx && nx.nodeType === 1 && nx.classList &&
                                    nx.classList.contains('drop-indicator')) nx = nx.nextSibling;
-                            container.insertBefore(indicator, nx || null);
+                            __host.insertBefore(indicator, nx || null);
                         }
                         indicator.style.display = 'block';
                     } else {
@@ -1439,11 +1583,15 @@
                     }
                 }
                 if (!dragSrcFile) return;
-                /* 文件夹里的脚本：悬停到别的文件夹上 -> 明确不给预览（它不能跨文件夹） */
+                /* ★ 文件夹里的脚本：只有在"悬停到【别的】文件夹上"时才拒绝。
+                   ★★★ 原来写的是 if (fOther) —— 只要光标落在任何文件夹内部就擦掉预览，
+                   连它【自己所在的文件夹】也算，于是组内拖拽时预览刚画上就被这里擦掉：
+                   既看不到落点，drop 时也会被下面的逻辑拒绝 -> 组内顺序完全改不了。
+                   现在改成"只有跨文件夹才拒绝"，同文件夹交给行自己的上下半区逻辑。 */
                 var fOther = null;
                 try { fOther = REORDER.folderAtY ? REORDER.folderAtY(e.clientY) : null; } catch (eFB) {}
-                if (fOther) { hideIndicator(); return; }
-                /* 其余（顶层脚本落到顶层脚本行）由行自己的 dragover 处理，这里不用管 */
+                if (fOther && fOther.folder !== folderOf(dragSrcFile)) { hideIndicator(); return; }
+                /* 同文件夹 / 顶层脚本行 -> 由行自己的 dragover 处理，这里不动 */
             };
 
             window.__psjsxContainerDrop = function (e) {
@@ -1555,7 +1703,9 @@
                 /* ★ 首选：按冻结几何判定（和预览完全一致）
                    · 顶层脚本落到文件夹内部 -> 放到该文件夹上方/下方
                    · 文件夹里的脚本落到别的文件夹内部 -> 不动（不能跨文件夹） */
-                if (fDrop) {
+                if (fDrop && fDrop.folder !== folderOf(dragSrcFile)) {
+                    /* ★ 只有"跨文件夹"才在这里处理（顶层脚本落进文件夹 / 拒绝跨文件夹的脚本）
+                       同文件夹时不要进这个分支 —— 否则组内重排会被直接 return 掉。 */
                     var __srcFd = folderOf(dragSrcFile);
                     if (__srcFd === '') {
                         var __relS = null;
@@ -1578,9 +1728,12 @@
                 if (!best) { try { showAtSource(); } catch (eS0) {} return; }
                 /* ★ 落点落在某个文件夹【内部】-> 等同于放到那个文件夹【下方】。
                    做法：目标换成"该文件夹的最后一条脚本"，并且插在它后面。 */
-                /* ★ 落点在文件夹内部 -> 同样按该文件夹整块的中线分上下 */
+                /* ★★★ 只有【顶层脚本落进文件夹内部】才用"整块中线"规则。
+                   文件夹里的脚本在【自己文件夹内】重排时，落点就是被指到的那一行，
+                   必须用「该行的上/下半区」（= bestBefore），不能被改写成"第一条/最后一条" ——
+                   否则组内拖拽永远只会跑到文件夹的头或尾。这是第二个原因。 */
                 var __sRel = best.rel, __sBefore = bestBefore;
-                if (!best.isHead && folderOf(best.rel) !== '') {
+                if (!best.isHead && folderOf(best.rel) !== '' && folderOf(dragSrcFile) === '') {
                     var __fld2 = folderOf(best.rel);
                     var __ff3 = REORDER.firstFileOf ? REORDER.firstFileOf(__fld2) : null;
                     var __lf = REORDER.lastFileOf ? REORDER.lastFileOf(__fld2) : null;

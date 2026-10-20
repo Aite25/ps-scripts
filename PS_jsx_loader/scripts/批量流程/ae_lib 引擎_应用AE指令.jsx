@@ -101,10 +101,18 @@ function AE_rptTouch(path) {
 function AE_rptOpen(jsonFile) {
     var base = jsonFile ? ("" + jsonFile.name).replace(/\.json$/i, "") : "ae08";
     AE_RPT.stamp = AE_rptStamp();
-    /* ★ 主报告：优先放【桌面】，文件名带时间戳 —— 最好找，且不可能被预先占用。
-       桌面拿不到就退回 %TEMP%。 */
+    /* ★ 主报告：默认放【桌面】，文件名带时间戳 —— 最好找，且不可能被预先占用。
+       桌面拿不到就退回 %TEMP%。
+       ★★ 静默模式（$.global.AE_HANDOFF_QUIET = true，批量脚本 ae 09 会设）：
+          主报告改放 %TEMP%，避免批量处理几十个文件时把桌面堆满。 */
+    var __quiet = false;
+    try { __quiet = !!$.global.AE_HANDOFF_QUIET; } catch (eQ) {}
     var __dir = "";
-    try { __dir = Folder.desktop.fsName; } catch (eD) { __dir = ""; }
+    if (__quiet) {
+        try { __dir = Folder.temp.fsName; } catch (eQ2) { __dir = ""; }
+    } else {
+        try { __dir = Folder.desktop.fsName; } catch (eD) { __dir = ""; }
+    }
     if (!__dir) { try { __dir = Folder.temp.fsName; } catch (eT) { __dir = ""; } }
     AE_RPT.path = __dir + "/ae08报告_" + base + "_" + AE_RPT.stamp + ".txt";
     /* 次报告：JSON 旁边（方便查看；被占用也不影响主报告） */
@@ -157,7 +165,7 @@ function AEHandoffRun() {
     if (!f || !f.exists) {
         AE_rptWrite("★ 没有选择 / 找不到 JSON：" + jsonPath);
         AE_rptClose();
-        alert("没有选择/找不到 JSON：" + jsonPath);
+        if (!($.global.AE_HANDOFF_QUIET)) { alert("没有选择/找不到 JSON：" + jsonPath); }
         return;
     }
 
@@ -166,7 +174,7 @@ function AEHandoffRun() {
     catch (eR) {
         AE_rptWrite("★ 读 JSON 失败：" + eR);
         AE_rptClose();
-        alert("读 JSON 失败：" + eR + "\n\n" + (f ? f.fsName : ""));
+        if (!($.global.AE_HANDOFF_QUIET)) { alert("读 JSON 失败：" + eR + "\n\n" + (f ? f.fsName : "")); }
         return;
     }
 
@@ -2210,6 +2218,7 @@ function AE_Apply(data, f) {
     var msg = head + "\n\n" + report.join("\n");
     msg += "\n\n报告文件（主，一定可读）：\n" + AE_RPT.path;
     if (AE_RPT.path2) msg += "\n\n报告文件（次，JSON 旁边）：\n" + AE_RPT.path2;
-    try { alert(msg); } catch (eA) {}
+    /* ★ 静默模式（批量 ae 09）不弹窗，靠报告文件汇总 */
+    if (!($.global.AE_HANDOFF_QUIET)) { try { alert(msg); } catch (eA) {} }
 
 }
