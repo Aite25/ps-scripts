@@ -36,6 +36,39 @@
 (function () {
 
 /* ==========================================================================
+ * 弹窗位置：放到副屏（屏幕矩形来自 %TEMP%\psjsx_screen_manual.txt）
+ * --------------------------------------------------------------------------
+ * 本工具不在批量流程里，所以用【独立工具】位置（屏幕靠右偏上）：
+ * 批量流程的进度条（ps 00 / ps 00_single）都是横向居中的，靠右放不会盖住它们。
+ * 拿不到屏幕设置就按系统默认位置显示，不影响功能。
+ * ========================================================================== */
+function placeWindowOnHostScreen(w, isStandalone) {
+    try {
+        if (typeof $.global.PSJSX_placeWindow !== "function") {
+            var p = null;
+            try {
+                var raw = "" + $.fileName;
+                var here = null;
+                try { here = File(raw); } catch (eA) { here = null; }
+                if (!here || !here.exists) { try { here = File(decodeURI(raw)); } catch (eB) { here = null; } }
+                /* 本脚本在 处理所有图层\，共享定位在 批量流程\ —— 要往上跳一层 */
+                if (here && here.parent && here.parent.parent) {
+                    p = here.parent.parent.fsName + "/批量流程/_共享 窗口位置.jsx";
+                }
+            } catch (e0) { p = null; }
+            if (p) {
+                var f = File(p);
+                if (f.exists) { try { $.evalFile(f); } catch (eE) {} }
+            }
+        }
+        if (typeof $.global.PSJSX_placeWindow === "function") {
+            return $.global.PSJSX_placeWindow(w, false, isStandalone === true);
+        }
+    } catch (e) {}
+    return false;
+}
+
+/* ==========================================================================
  * 选项
  * ========================================================================== */
 var OPTIONS = {
@@ -449,7 +482,9 @@ function pbOpen(total, title) {
         PB.bar = PB.win.add("progressbar", undefined, 0, (total > 0 ? total : 1));
         try { PB.bar.preferredSize.width = 360; } catch (e1) {}
         try { PB.win.preferredSize.width = 400; } catch (e2) {}
-        PB.win.show();
+        /* ★ 放到副屏靠右（独立工具位置），不挡批量流程的进度条 */
+    try { placeWindowOnHostScreen(PB.win, true); } catch (ePW1) {}
+    PB.win.show();
     } catch (e) { PB.win = null; }
 }
 function pbStep(s) {
@@ -660,6 +695,8 @@ function askDialog(counts) {
     gB.add("button", undefined, "开始", { name: "ok" });
     gB.add("button", undefined, "取消", { name: "cancel" });
 
+    /* ★ 放到副屏靠右（独立工具位置） */
+    try { placeWindowOnHostScreen(w, true); } catch (ePW2) {}
     if (w.show() !== 1) return false;
 
     OPTIONS.bakeShapes = (cb1.value === true);

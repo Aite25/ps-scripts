@@ -158,7 +158,15 @@ function layerByIndex(index) {
     })(DOC);
     return found;
 }
-/* 多选（列表按【从上到下】给） */
+/* 多选（列表按【从上到下】给）
+ * --------------------------------------------------------------------------
+ * ★★★ 两个键千万别搞混（踩过的坑）★★★
+ *   "null"  -> 放【目标引用】(ActionReference)。slct 需要一个"当前目标"作为容器；
+ *   "Lyr "  -> 放【图层列表】(ActionList)。要选中的那些层的 id 放这里。
+ *   之前把列表写到了 "null" 上 -> PS 报「命令"选择"当前不可用」
+ *   （"发生了常规 Photoshop 错误…… 该功能可能无法在这个版本的 Photoshop 中使用"）。
+ *   实际上跟 PS 版本毫无关系，就是键名错了。
+ * ========================================================================== */
 function selectLayersByIds(ids) {
     var list = new ActionList();
     for (var i = 0; i < ids.length; i++) {
@@ -167,7 +175,10 @@ function selectLayersByIds(ids) {
         list.putReference(r);
     }
     var d = new ActionDescriptor();
-    d.putList(cid("null"), list);
+    var targetRef = new ActionReference();
+    targetRef.putEnumerated(cid("Lyr "), cid("Ordn"), cid("Trgt"));
+    d.putReference(cid("null"), targetRef);       /* ★ 目标引用放 "null" */
+    d.putList(cid("Lyr "), list);                 /* ★ 图层列表放 "Lyr " */
     executeAction(cid("slct"), d, DialogModes.NO);
 }
 
@@ -329,16 +340,108 @@ function doWork() {
     /* ---- ④ 记下合并前状态（用来校验有没有多死图层） ---- */
     var idsBefore = layerIdSet();
 
-    /* ---- ⑤ 选中：剪贴链（上）+ 文件夹（下），然后 Ctrl+E ---- */
-    var ids = [];
-    for (var q = chain.length - 1; q >= 0; q--) ids.push(getId(chain[q]));   /* 从上到下 */
-    ids.push(R.folderId);                                                    /* 文件夹在最下 */
-    plog("准备合并 " + ids.length + " 个图层（从上到下）：" +
-         (function () { var ns = []; for (var z = 0; z < ids.length; z++) ns.push(ids[z]); return ns.join(", "); })());
-    selectLayersByIds(ids);
+    /* ---- ⑤ 分两步合并 ----
+     * ★★★ 为什么不能一次多选（实测结论）★★★
+     *   如果一次多选「文件夹 + 它上方的剪贴层」再执行 Mrg2，
+     *   PS 只会执行【合并组】（把文件夹拍平），完全忽略其它被选中的图层 ——
+     *   结果就是"只合并了文件夹内容，上方的剪贴层一个都没动"。
+     *   所以必须分两步：
+     *     ① 只选文件夹                 -> Mrg2（合并组）-> 文件夹变成普通图层
+     *     ② 选「上方剪贴链 + 那个图层」-> Mrg2        -> 真正合成一层
+     * ---------------------------------------------------------------------- */
 
-    plog("执行合并（相当于 Ctrl+E：Mrg2）…");
-    executeAction(cid("Mrg2"), new ActionDescriptor(), DialogModes.NO);
+    /* ★ 合并前预处理：剪辑链上每层都解锁 / 取消背景层 / 栅格化智能对象。
+       「命令"合并图层"当前不可用」最常见的真凶就是这三样。 */
+    for (var __pk = 0; __pk < chain.length; __pk++) {
+        var __Lk = chain[__pk];
+        var __nk = [];
+        try { if (__Lk.isBackgroundLayer) { __Lk.isBackgroundLayer = false; __nk.push("取消背景层"); } } catch (eK1) {}
+        try { if (__Lk.allLocked) { __Lk.allLocked = false; __nk.push("解除全部锁定"); } } catch (eK2) {}
+        try { if (__Lk.positionLocked) { __Lk.positionLocked = false; __nk.push("解除位置锁定"); } } catch (eK3) {}
+        try { if (__Lk.kind === LayerKind.SMARTOBJECT) { __Lk.rasterize(RasterizeType.ENTIRELAYER); __nk.push("栅格化智能对象"); } } catch (eK4) { __nk.push("栅格化失败：" + cleanMsg("" + eK4)); }
+        if (__nk.length) plog("  预处理「" + safeName(__Lk) + "」：" + __nk.join(" / "));
+    }
+
+    /* ★ 合并期间关掉 PS 的确认框：矢量智能对象合并时要栅格化，
+       脚本里没人点确认 -> 会报「用户取消了操作」。
+       （app.displayDialogs 才能影响 layer.merge() 这类 ExtendScript 方法） */
+    var __prevDialogs = null;
+    try { __prevDialogs = app.displayDialogs; } catch (ePD) { __prevDialogs = null; }
+    try { app.displayDialogs = DialogModes.NO; } catch (ePD2) {}
+
+    /* ① 拍平文件夹：用 LayerSet.merge()（= PS 的 Ctrl+E 合并组）
+     * ★★★ 别再对"单个组"用 Mrg2 ★★★
+     *   MRg2 的命令名是【合并图层】，要求至少两层；对单个组执行会报
+     *   「命令"合并图层"当前不可用」。LayerSet.merge() 才是合并组。
+     * ---------------------------------------------------------------------- */
+    plog("第 1 步：拍平文件夹（LayerSet.merge()）…");
+
+    var flatId = -1;
+    try {
+        var mergedL = folder.merge();
+        if (mergedL) flatId = getId(mergedL);
+        if (flatId >= 0) plog("  merge() 成功，结果图层 id=" + flatId);
+    } catch (eM1) {
+        plog("  merge() 失败：" + cleanMsg("" + eM1) + "　改用 Mrg2 退路");
+    }
+
+    if (flatId < 0) {
+        try {
+            selectLayersByIds([R.folderId]);
+            executeAction(cid("Mrg2"), new ActionDescriptor(), DialogModes.NO);
+            var flatL = DOC.activeLayer; if (flatL) flatId = getId(flatL);
+        } catch (eM2) {
+            plog("  退路 Mrg2 也失败：" + cleanMsg("" + eM2));
+        }
+    }
+    if (flatId < 0) throw new Error("拍平文件夹失败（merge() 与 Mrg2 都没成）");
+    plog("  已拍平，结果图层 id=" + flatId + "　名字=「" + safeName(DOC.activeLayer) + "」");
+
+    /* ② 上方剪贴链：从最下面那层开始，逐层 ArtLayer.merge()（合并向下）
+     * ★ 不用 Mrg2 多选：PS 对"多选 + 合并图层"经常报
+     *   「命令"合并图层"当前不可用」，而且含组时还会只做合并组。
+     *   merge() 是"与下面那层合并"，一层层并下去，语义最确定。
+     *   （合并向下保留【下面那层】的 id，所以拍平后的图层一直有效。）
+     * ------------------------------------------------------------------ */
+    if (chain.length > 0) {
+        /* ★ 第 2 步：先走【Mrg2 多选】—— 这条路在真实文档上验证过可用
+         *   （日志实测：3 层多选 -> 消失 4 个 -> 合成 1 层，结果正确）。
+         *   万一失败，再退回逐层 ArtLayer.merge()。
+         * -------------------------------------------------------------- */
+        var ids2 = [];
+        for (var q2 = chain.length - 1; q2 >= 0; q2--) ids2.push(getId(chain[q2]));   /* 从上到下 */
+        ids2.push(flatId);                                                            /* 拍平后的层在最下 */
+        plog("第 2 步：连同上方 " + chain.length + " 个剪贴层合并（共 " + ids2.length + " 层）：" + ids2.join(", "));
+
+        var step2ok = false;
+        try {
+            selectLayersByIds(ids2);
+            executeAction(cid("Mrg2"), new ActionDescriptor(), DialogModes.NO);
+            step2ok = true;
+            plog("  ✔ Mrg2 多选合并成功");
+        } catch (eS2) {
+            plog("  Mrg2 多选失败（" + cleanMsg("" + eS2) + "），改用逐层 merge()");
+        }
+
+        if (!step2ok) {
+            var flatLayer = null;
+            try { flatLayer = DOC.activeLayer; } catch (eFL) { flatLayer = null; }
+            if (!flatLayer) throw new Error("第 2 步：拿不到活动图层");
+            for (var q = chain.length - 1; q >= 0; q--) {
+                try {
+                    chain[q].merge();
+                    plog("  ✔ 已并入「" + safeName(chain[q]) + "」（逐层）");
+                } catch (eM3) {
+                    throw new Error("合并「" + safeName(chain[q]) + "」失败：" + cleanMsg("" + eM3));
+                }
+            }
+        }
+    } else {
+        plog("第 2 步：上方没有剪贴层，跳过（只需拍平）");
+    }
+
+    /* 合并做完了，还原对话框设置 */
+    try { if (__prevDialogs !== null) app.displayDialogs = __prevDialogs; } catch (ePD3) {}
 
     /* ---- ⑥ 找结果层 ----
        合并通常把【下面那层】留下来 = 复用文件夹的 id；也可能生成全新 id。
@@ -464,7 +567,20 @@ function main() {
             ran = true;
         }
     } catch (eS) {
-        plog("（suspendHistory 不可用，改为直接跑：" + cleanMsg("" + eS) + "）");
+        /* ★★ 这里必须区分两种错误来源 ★★
+           suspendHistory 抛错有两种可能：
+             ① 它自己在这个 PS 上不可用；
+             ② 里面执行的 doWork() 抛了异常。
+           以前一律当 ① 处理，于是【又跑一遍 doWork】—— 日志里出现重复的剪贴链、
+           图层也会被操作两次。现在只有错误信息里明确带 "suspendHistory" 才重试。 */
+        var m0 = cleanMsg("" + eS);
+        if (/suspendHistory/i.test(m0)) {
+            plog("（suspendHistory 不可用，改为直接跑：" + m0 + "）");
+        } else {
+            ran = true;                     /* 视为"跑过了，但失败了"：不再重跑 */
+            errMsg = m0;
+            plog("★ 出错：" + errMsg);
+        }
     }
     if (!ran) {
         try { doWork(); } catch (eD) { errMsg = cleanMsg("" + eD); plog("★ 出错：" + errMsg); }
@@ -500,6 +616,14 @@ function showResult(errMsg) {
         }
         t += "\n（一次 Ctrl+Z 可以整体撤销）";
         t += "\n\n日志：\n" + logPath();
+    }
+    /* ★★ 成功一律不弹窗（按用户要求）★★
+       只有【失败】才弹。
+       成功时的细节（含 ⚠ 警告，比如混合模式没能完全还原、文件夹是穿透所以结果用了正常）
+       全都写进日志文件，不再打断操作。
+       日志：%TEMP%\psjsx_merge_folder_log.txt */
+    if (!errMsg) {
+        return;                 /* 成功：静默 */
     }
     try { alert(t); } catch (e) {}
 }

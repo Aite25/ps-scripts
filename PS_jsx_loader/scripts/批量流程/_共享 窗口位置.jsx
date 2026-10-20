@@ -104,7 +104,7 @@ function PSJSX_targetScreen() {
  * 横向居中；纵向按"层"决定（见文件顶部说明）：
  *   外层运行器 / 单独跑某步 -> 上 1/3；批处理里的子步骤 -> 下 1/3
  * 拿不到屏幕信息就返回 false（窗口按系统默认位置显示，不影响功能）。 */
-function PSJSX_placeWindow(w, isRunner) {
+function PSJSX_placeWindow(w, isRunner, isStandalone) {
     try {
         if (!w) return false;
         var s = PSJSX_targetScreen();
@@ -125,7 +125,13 @@ function PSJSX_placeWindow(w, isRunner) {
 
         var x = s.l + Math.round((s.w - ww) / 2);
         var y;
-        if (inBatch && isRunner !== true) {
+        if (isStandalone === true) {
+            /* ★ 独立工具（不在批量流程里）：靠【右】偏上。
+               批量流程的进度条都是【横向居中】的，靠右放就不会盖住它们。
+               第三层：上 1/3 = 运行器，下 1/3 = 子步骤，右侧 = 独立工具。 */
+            x = s.l + s.w - ww - 24;
+            y = s.t + 24;
+        } else if (inBatch && isRunner !== true) {
             y = s.t + Math.round((s.h - hh) * 2 / 3);      /* ★ 下层：批处理子步骤 */
         } else {
             y = s.t + Math.round((s.h - hh) / 3);          /* 上层：外层运行器 / 单独跑 */

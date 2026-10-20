@@ -293,6 +293,31 @@
         /* 拖动时不显示原来的条目（只留蓝矩形）。
            ★ 不能用 display:none —— 拖动源被隐藏会让浏览器直接中止拖拽（所有行都拖不动）。
            用 opacity:0：视觉上看不到原条目，但拖拽不受影响。 */
+        /* ===== 脚本执行中的状态提示 =====
+           evalScript 的回调在 PS 侧跑完时才触发，所以点击后给这一行上色、
+           回调里再撤掉 —— 一眼就能看出"正在执行"还是"已经跑完"。 */
+        @keyframes psjsxRunningPulse {
+            0%   { background: #1f4e8a !important; }
+            50%  { background: #3a86dc !important; }
+            100% { background: #1f4e8a !important; }
+        }
+        .btn-row.running .ps-btn {
+            background: #1f4e8a !important;
+            color: #eaf3ff !important;
+            animation: psjsxRunningPulse 1.1s ease-in-out infinite !important;
+            cursor: progress !important;
+        }
+        @keyframes psjsxErrorFlash {
+            0%   { background: #8f2a2a !important; }
+            50%  { background: #c23a3a !important; }
+            100% { background: #8f2a2a !important; }
+        }
+        .btn-row.run-error .ps-btn {
+            background: #8f2a2a !important;
+            color: #ffecec !important;
+            animation: psjsxErrorFlash 0.35s ease-in-out 4 !important;
+        }
+
         /* ===== 拖到文件夹【内部】时：分界线 + 上/下半区高亮 =====
            中线以上 = 放到该文件夹【上方】；中线以下 = 放到该文件夹【下方】。
            高亮层是绝对定位的覆盖层，所以 .folder-sec 要有 position:relative。 */
@@ -1306,8 +1331,45 @@
                 var fullPath = path.join(scriptsDir, file).replace(/\\/g, '/');
 
                 btn.addEventListener('click', function () {
-                    var cs = new CSInterface();
-                    cs.evalScript('runScript("' + fullPath + '")');
+                    /* ★★★ 执行中提示 ★★★
+                       为什么能知道"跑完了"：evalScript 的第二个参数是回调，
+                       它在 PS 侧那个 JSX 执行完毕后才被调用（脚本里如果有模态窗口，
+                       回调会等到窗口关掉之后才来）。
+                       所以：点击 -> 行变色并脉冲 -> 回调 -> 复原。
+
+                       去重：正在跑的时候再点同一个按钮直接忽略，避免重复执行。
+                       如果某次回调因为面板重载等原因没跑到，点一下 ⟳ / ♻ 重建列表就清掉了。 */
+                    if (row.classList && row.classList.contains('running')) return;
+
+                    var __cs = new CSInterface();
+                    var __done = false;
+                    var __finish = function () {
+                        if (__done) return;
+                        __done = true;
+                        try { row.classList.remove('running'); } catch (e0) {}
+                        try { row.removeAttribute('title'); row.title = file; } catch (e0b) {}
+                    };
+
+                    try {
+                        row.classList.add('running');
+                        row.title = file + '  ——  正在执行…';
+                    } catch (e1) {}
+
+                    try {
+                        __cs.evalScript('runScript("' + fullPath + '")', function (res) {
+                            /* PS 侧抛异常时返回的是 "EvalScript error." */
+                            var __bad = ("" + res) === "EvalScript error.";
+                            if (__bad) {
+                                try { row.classList.add('run-error'); } catch (e2) {}
+                                setTimeout(function () {
+                                    try { row.classList.remove('run-error'); } catch (e3) {}
+                                }, 1500);
+                            }
+                            __finish();
+                        });
+                    } catch (e4) {
+                        __finish();
+                    }
                 });
 
                 var hotTag = document.createElement('span');
