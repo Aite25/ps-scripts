@@ -19,6 +19,10 @@
 //   5. Mrg2 合并（= Ctrl+E）。
 //   6. 还原名字 = 基底原名；混合模式 = 基底原模式（穿透 -> 正常）。
 //
+// 额外功能（并入自"穿透检查"版）：
+//   若基底是【穿透】文件夹，合并前递归扫描内部所有图层（含子文件夹 ✗），
+//   收集混合模式不是【正常】的层；合并成功后弹窗报告数量 + 名称 + 模式。
+//
 // 日志：%TEMP%\psjsx_merge_up_auto_log.txt
 // 成功不弹窗；失败/选区异常才弹。
 // ===========================================================================
@@ -112,6 +116,38 @@ function layerInParent(par, index) {
     return null;
 }
 
+/* ==========================================================================
+ * 递归扫描：找出混合模式【不是"正常"】的图层
+ *   （并入自 ps 连同上方图层合并_穿透检查.jsx）
+ * ========================================================================== */
+function collectNonNormal(folder, out, depth, pathPrefix) {
+    if (!folder || !folder.layers || depth > 30) return;
+    var prefix = pathPrefix || "";
+    for (var i = 0; i < folder.layers.length; i++) {
+        var L = folder.layers[i];
+        var nm = "";
+        try { nm = "" + L.name; } catch (e1) { nm = "?"; }
+        var tn = "";
+        try { tn = "" + L.typename; } catch (e2) { tn = "?"; }
+
+        if (tn === "LayerSet") {
+            var gMode = "";
+            try { gMode = "" + L.blendMode; } catch (e3) { gMode = "?"; }
+            if (gMode !== "BlendMode.NORMAL" && gMode !== "BlendMode.PASSTHROUGH") {
+                out.push({ name: nm, mode: gMode, path: prefix + nm + "（文件夹）" });
+            }
+            collectNonNormal(L, out, depth + 1, prefix + nm + " / ");
+            continue;
+        }
+
+        var mode = "";
+        try { mode = "" + L.blendMode; } catch (e4) { mode = "?"; }
+        if (mode !== "BlendMode.NORMAL") {
+            out.push({ name: nm, mode: mode, path: prefix + nm });
+        }
+    }
+}
+
 function safeName(L) { try { return "" + L.name; } catch (e) { return "?"; } }
 function isClipped(L) { try { return (L.grouped === true); } catch (e) { return false; } }
 
@@ -145,6 +181,24 @@ function main() {
     var baseName = safeName(base);
     var baseBlend = null;
     try { baseBlend = base.blendMode; } catch (eB) { baseBlend = null; }
+
+    /* ★ 若是【穿透】文件夹 -> 合并前扫描内部非"正常"混合模式（合并后对象会失效 ✗） */
+    var passReport = [];
+    var isPassThroughFolder = false;
+    try {
+        var bType0 = "";
+        try { bType0 = "" + base.typename; } catch (eT0) { bType0 = ""; }
+        if (bType0 === "LayerSet" && baseBlend === BlendMode.PASSTHROUGH) {
+            isPassThroughFolder = true;
+            collectNonNormal(base, passReport, 0, "");
+            p("  · 基底是【穿透】文件夹，内部非正常混合模式：" + passReport.length + " 个");
+            for (var __pr = 0; __pr < passReport.length; __pr++) {
+                p("      - " + passReport[__pr].path + "  →  " + passReport[__pr].mode);
+            }
+        }
+    } catch (eScan) {
+        p("  · 扫描内部混合模式出错（忽略）：" + clean(eScan));
+    }
     var baseIdx = idxList[0];
     var baseIsSet = false;
     try { baseIsSet = (base.typename === "LayerSet"); } catch (eT) {}
@@ -346,7 +400,29 @@ function main() {
     }
 
     writeLog();
-    /* 成功不弹窗 */
+
+    /* ★ 成功不弹窗 —— 唯一例外：穿透文件夹内部有非"正常"混合模式时报告一次 */
+    if (isPassThroughFolder && passReport.length > 0) {
+        var lines = [];
+        lines.push("合并成功。");
+        lines.push("");
+        lines.push("但要注意：这个文件夹原本是【穿透】模式，而它内部下面这些图层的");
+        lines.push("混合模式不是【正常】（共 " + passReport.length + " 个）：");
+        lines.push("");
+        for (var __q = 0; __q < passReport.length; __q++) {
+            var __m = passReport[__q].mode;
+            try { __m = ("" + __m).replace("BlendMode.", ""); } catch (eNm) {}
+            lines.push("  " + (__q + 1) + ". " + passReport[__q].path);
+            lines.push("       混合模式 = " + __m);
+        }
+        lines.push("");
+        lines.push("说明：文件夹是穿透时，内部这些混合模式会与文件夹下方的内容相互作用；");
+        lines.push("      合并成一个普通图层后，这种相互作用就没有了，画面可能与原来不同。");
+        lines.push("      如果确认看起来没问题，可以忽略这条提示。");
+        lines.push("");
+        lines.push("（日志：%TEMP%\\psjsx_merge_up_auto_log.txt）");
+        try { alert(lines.join("\n")); } catch (eAl) {}
+    }
 }
 
 try { $.global.PSJSX_MERGE_UP_AUTO_HOOK = main; } catch (eG) {}
