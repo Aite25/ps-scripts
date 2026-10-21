@@ -158,6 +158,18 @@ function layerByIndex(index) {
     })(DOC);
     return found;
 }
+/* 读回"当前真实选中了几层" —— 用来验证选区，别再靠假设 */
+function countSelected() {
+    try {
+        var ref = new ActionReference();
+        ref.putProperty(sid("property"), sid("targetLayers"));
+        ref.putEnumerated(sid("document"), sid("ordinal"), sid("targetEnum"));
+        var d = executeActionGet(ref);
+        if (!d.hasKey(sid("targetLayers"))) return 0;
+        return d.getList(sid("targetLayers")).count;
+    } catch (e) { return -1; }
+}
+
 /* 多选（列表按【从上到下】给）
  * --------------------------------------------------------------------------
  * ★★★ 两个键千万别搞混（踩过的坑）★★★
@@ -413,14 +425,22 @@ function doWork() {
         ids2.push(flatId);                                                            /* 拍平后的层在最下 */
         plog("第 2 步：连同上方 " + chain.length + " 个剪贴层合并（共 " + ids2.length + " 层）：" + ids2.join(", "));
 
+        /* ★ 先验证选区真的选中了 N 层 ——「命令"合并图层"当前不可用」
+           最常见的原因就是实际只选中了 1 层（合并图层至少要 2 层）。 */
         var step2ok = false;
         try {
             selectLayersByIds(ids2);
-            executeAction(cid("Mrg2"), new ActionDescriptor(), DialogModes.NO);
-            step2ok = true;
-            plog("  ✔ Mrg2 多选合并成功");
+            var cnt2 = countSelected();
+            plog("  选区自检：想选 " + ids2.length + " 层，实际选中 " + cnt2 + " 层");
+            if (cnt2 === ids2.length) {
+                executeAction(cid("Mrg2"), new ActionDescriptor(), DialogModes.NO);
+                step2ok = true;
+                plog("  ✔ Mrg2 多选合并成功");
+            } else {
+                plog("  ★ 选区数量不对，跳过 Mrg2，改用逐层合并向下");
+            }
         } catch (eS2) {
-            plog("  Mrg2 多选失败（" + cleanMsg("" + eS2) + "），改用逐层 merge()");
+            plog("  Mrg2 多选失败（" + cleanMsg("" + eS2) + "），改用逐层合并向下");
         }
 
         if (!step2ok) {
@@ -470,10 +490,16 @@ function doWork() {
     R.mergedName = safeName(res);
     plog("结果层：「" + R.mergedName + "」　id=" + R.mergedId + "　还是文件夹吗=" + (isGroup(res) ? "是(★异常)" : "否"));
 
-    /* ---- ⑦ 校验：消失的层数应该正好 ---- */
-    var expectGone = R.folderDescendants + 1 /* 文件夹自己 */ + chain.length;
+    /* ---- ⑦ 校验：消失的层数应该正好 ----
+     * ★ 公式修正：
+     *   拍平文件夹时，"文件夹自己 + 它的 N 个后代" 会变成 1 个图层，
+     *   所以消失的是 N 个（后代数），【文件夹自己不算额外消失】。
+     *   第二步把 M 个剪贴层并进这 1 个，消失 M 个。
+     *   合计 = 后代数 + 剪贴层数。
+     *   （以前多算了"+1 文件夹自己"，所以总是报"预期 5、实际 4"的假警报。） */
+    var expectGone = R.folderDescendants + chain.length;
     plog("  [校验] 预期消失 " + expectGone + " 个（文件夹后代 " + R.folderDescendants +
-         " + 文件夹自己 1 + 上方剪贴链 " + chain.length + "），实际消失 " + goneCount + " 个");
+         " + 上方剪贴链 " + chain.length + "；文件夹自己并入首层、不额外算），实际消失 " + goneCount + " 个");
     if (goneCount !== expectGone) {
         R.warn.push("★ 消失的图层数(" + goneCount + ")和预期(" + expectGone +
                     ")对不上 —— 有可能多合掉了别的图层，请检查画面（或 Ctrl+Z 撤销）");
@@ -501,11 +527,24 @@ function doWork() {
         goalName = R.uniformMode;
         note = "内部图层（排除剪贴层）模式一致 = " + R.uniformMode + " -> 套用到结果层";
     } else if (R.uniformMode && isNormalMode(R.uniformMode)) {
-        doSet = true;
-        goalVal = R.folderBlendVal;
-        goalName = R.folderBlend;
-        note = "内部图层（排除剪贴层）全是【正常】-> 按需求不修改" +
-               "（保持文件夹原本的模式：" + R.folderBlend + "）";
+        /* ★★ 两种子情况要分开 ★★
+           ① 文件夹原本是【穿透】(PassThrough)：
+              合并结果是【普通图层】，而"穿透"只能用于图层组 ——
+              PS 会报「"穿透"混合模式只可用于图层组」。
+              这是必然的，不是失败：结果保持【正常】正是要的效果，
+              所以【不要去设置、也不要记警告】。
+           ② 其它模式：保持文件夹原本的模式即可（内部全是正常 -> 不改）。 */
+        if (String(R.folderBlend).toUpperCase() === "PASSTHROUGH") {
+            doSet = false;
+            note = "内部图层全是【正常】；文件夹原为【穿透】—— 结果层是普通图层，" +
+                   "保持【正常】（符合预期，不视为失败）";
+        } else {
+            doSet = true;
+            goalVal = R.folderBlendVal;
+            goalName = R.folderBlend;
+            note = "内部图层（排除剪贴层）全是【正常】-> 按需求不修改" +
+                   "（保持文件夹原本的模式：" + R.folderBlend + "）";
+        }
     } else if (R.innerModes.length > 1) {
         doSet = true;
         goalVal = R.folderBlendVal;
