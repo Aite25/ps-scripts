@@ -183,14 +183,128 @@ function main() {
 
     p("选区：读出 " + sel.length + " 项，targetLayers 计数 " + cnt);
 
+    /* ★★★ 只选中 1 层，且它是一个【文件夹】-> 走「合并组」★★★
+     *   「合并组」不需要第二个对象（Mrg2 作用在单个 LayerSet 上就是合并组），
+     *   所以这种情况可以直接合并，不必强求选中 2 层。
+     *   还原：名字 / 混合模式都取这个文件夹自己的。
+     *   ⚠ 例外：文件夹带【矢量蒙版】时 PS 会拒绝「合并组」—— 先检测并提示。 */
+    if (cnt === 1 && sel.length === 1) {
+        var onlyLayer = null;
+        try { onlyLayer = sel[0].layer; } catch (eOL) { onlyLayer = null; }
+        var onlyType = "";
+        try { onlyType = "" + onlyLayer.typename; } catch (eOT) { onlyType = ""; }
+
+        if (onlyLayer && onlyType === "LayerSet") {
+            p("只选中 1 个文件夹 -> 走【合并组】（不需要第二个图层）");
+
+            /* 矢量蒙版检测 */
+            var hasVec = false;
+            try {
+                var rV = new ActionReference();
+                rV.putEnumerated(cT("Lyr "), cT("Ordn"), cT("Trgt"));
+                var dV = executeActionGet(rV);
+                hasVec = dV.hasKey(sT("hasVectorMask"));
+            } catch (eV) { hasVec = false; }
+
+            if (hasVec) {
+                p("  ★ 该文件夹带矢量蒙版 -> 合并组会被 PS 拒绝");
+                writeLog();
+                alert("这个文件夹带【矢量蒙版】，PS 无法执行「合并组」。\n\n" +
+                      "解决办法：\n" +
+                      "  · 如果它上方有剪贴层：手动多选（文件夹 + 剪贴层）再跑本脚本 —— 那是「合并图层」，能成功 ✔\n" +
+                      "  · 如果没有剪贴层：PS 对带矢量蒙版的组没有可用命令，只能先手动处理蒙版\n\n" +
+                      "日志：%TEMP%\\psjsx_merge_up_log.txt");
+                return;
+            }
+
+            var fName = "";
+            try { fName = "" + onlyLayer.name; } catch (eFN) { fName = ""; }
+            var fBlend = null;
+            try { fBlend = onlyLayer.blendMode; } catch (eFB) { fBlend = null; }
+            p("  文件夹：「" + fName + "」　原混合模式=" + fBlend);
+
+            var prevD = null;
+            try { prevD = app.displayDialogs; } catch (ePD1) { prevD = null; }
+            try { app.displayDialogs = DialogModes.NO; } catch (ePD2) {}
+
+            var okG = false;
+            try {
+                /* 确保这个文件夹是当前目标层，然后执行 Mrg2 = 合并组 */
+                var rSel = new ActionReference();
+                rSel.putIdentifier(cT("Lyr "), sel[0].layer ? sel[0].layer.id : 0);
+                var dSel = new ActionDescriptor();
+                dSel.putReference(cT("null"), rSel);
+                executeAction(cT("slct"), dSel, DialogModes.NO);
+            } catch (eSelG) {
+                /* 选不上也无所谓，它本来就被选中 */
+            }
+
+            try {
+                executeAction(cT("Mrg2"), new ActionDescriptor(), DialogModes.NO);
+                okG = true;
+                p("  OK 合并组执行成功");
+            } catch (eMG) {
+                p("  ★ 合并组失败：" + eMG);
+            } finally {
+                try { if (prevD !== null) app.displayDialogs = prevD; } catch (ePD3) {}
+            }
+
+            if (!okG) {
+                writeLog();
+                alert("合并这个文件夹失败。\n\n" +
+                      "常见原因：它带【矢量蒙版】（PS 不支持对带矢量蒙版的组执行合并组）。\n\n" +
+                      "如果它上方有剪贴层，请手动多选（文件夹 + 剪贴层）再跑 —— 那是「合并图层」，能成功。\n\n" +
+                      "日志：%TEMP%\\psjsx_merge_up_log.txt");
+                return;
+            }
+
+            /* 还原名字 / 混合模式 */
+            var resG = null;
+            try { resG = doc.activeLayer; } catch (eRG) { resG = null; }
+            if (resG) {
+                if (fName) {
+                    try { resG.name = fName; p("  OK 名字已还原：「" + fName + "」"); } catch (eNG) { p("  ★ 还原名字失败：" + eNG); }
+                }
+                if (fBlend !== null) {
+                    var wantPassG = false;
+                    try { wantPassG = (fBlend === BlendMode.PASSTHROUGH); } catch (ePG) { wantPassG = false; }
+                    if (wantPassG) {
+                        try { resG.blendMode = BlendMode.NORMAL; } catch (eNG2) {}
+                        p("  · 原模式是【穿透】—— 结果是普通图层，保持【正常】（符合预期）");
+                    } else {
+                        try { resG.blendMode = fBlend; p("  OK 混合模式已还原：" + fBlend); } catch (eBG) { p("  ★ 设置混合模式失败：" + eBG); }
+                    }
+                }
+            } else {
+                p("  ★ 合并后拿不到结果层");
+            }
+
+            writeLog();
+            return;   /* 单文件夹分支结束 */
+        }
+    }
+
+
     if (!sel.length || cnt < 2) {
         p("");
         p("★ 选区不足 2 层 —— 无法合并。");
         p("  请在图层面板里手动选中：主要图层 + 它上方的剪贴蒙版图层。");
         writeLog();
-        alert("请先在图层面板里选中【主要图层】以及它上方的【剪贴蒙版图层】（至少 2 层），再跑本脚本。\n\n" +
-              "（当前读到 " + (cnt >= 0 ? cnt : sel.length) + " 层）\n\n" +
-              "日志：%TEMP%\\psjsx_merge_up_log.txt");
+        var __tip = [];
+        __tip.push("还不能合并：至少要选中 2 层。");
+        __tip.push("");
+        __tip.push("（当前读到 " + (cnt >= 0 ? cnt : sel.length) + " 层）");
+        __tip.push("");
+        __tip.push("请你这样选：");
+        __tip.push("  ① 选中【最下面那层】—— 普通图层 或 文件夹，都行");
+        __tip.push("  ② 再 Ctrl+点击 它上方的【剪贴蒙版图层】（有一个选一个）");
+        __tip.push("");
+        __tip.push("⚠ 如果你选的是一个【文件夹】，脚本不会自动把它里面的图层拿来合并；");
+        __tip.push("   你要合并的是【文件夹 + 它上方的剪贴层】，两者都要选中。");
+        __tip.push("   （只选文件夹 = 「合并组」，本脚本不做那个；而且带蒙版时 PS 会拒绝。）");
+        __tip.push("");
+        __tip.push("日志：%TEMP%\\psjsx_merge_up_log.txt");
+        try { alert(__tip.join("\n")); } catch (eTip) {}
         return;
     }
 
