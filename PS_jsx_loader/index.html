@@ -549,6 +549,12 @@
             entries.forEach(function (en) {
                 var nm = en.name;
                 if (!nm || nm.charAt(0) === '.' || nm === 'node_modules') return;
+                /* 面板不显示「参考 / 备份」这类目录：
+                   · 以 _ 开头（_废弃备份 等）
+                   · 以 参考 开头（参考_经验 / 参考_多选与选区）
+                   这些是文档和调试材料，不是可运行的日常工具。 */
+                if (nm.charAt(0) === '_') return;
+                if (nm.indexOf('参考') === 0) return;
                 var isDir = false;
                 try { isDir = (en.isDirectory && en.isDirectory()); } catch (e3) {}
                 if (isDir) { dirs.push(nm); return; }
