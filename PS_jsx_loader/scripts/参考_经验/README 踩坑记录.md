@@ -621,3 +621,83 @@ ull 指向了 Chnl/Chnl/fsel ✗ —— 应该是 Chnl/Chnl/Msk
 
 > **带蒙版的文件夹：手动多选（文件夹 + 上方剪贴层）+ ps 连同上方图层合并 ✔**
 > **不要试图用"合并组"那条路** ✗（矢量蒙版会卡死它 ✗）
+
+---
+
+## 十五、★★★ 更正：脚本【可以】建多层选区 ★★★
+
+**前面第二/三章的结论（slct 五种写法全失败 → 脚本无法多选）是错的** ✗
+**正确写法来自用户笔记，实测可用** ✔
+
+### ✔ 正确写法：一次 slct，同一 ActionReference 上连续 putIndex，并带 MkVs=false
+
+`js
+function selectManyInOneCall(indexList) {          // indexList = itemIndex 数组
+    var desc = new ActionDescriptor();
+    var ref = new ActionReference();
+    for (var i = 0; i < indexList.length; i++) {
+        ref.putIndex(charIDToTypeID("Lyr "), indexList[i]);   // ★ 同一个 ref 连续 putIndex
+    }
+    desc.putReference(charIDToTypeID("null"), ref);
+    desc.putBoolean(charIDToTypeID("MkVs"), false);           // ★ 必须带
+    executeAction(charIDToTypeID("slct"), desc, DialogModes.NO);   // ★ 只调用一次
+}
+`
+
+**实测**：传 2 个 index -> 	argetLayers.count === 2 ✔
+
+### ✗ 之前为什么全失败
+
+| 我试过的 | 为什么不行 |
+|---|---|
+| ActionList + putReference + desc.putList("Lyr ", list) | 只选中 1 层（列表被忽略） |
+| desc.putList("null", list) | 命令"选择"当前不可用 |
+| putClass("Lyr ") / putClass("Dcmn") | 命令"选择"当前不可用 |
+| **每层调一次 slct（每次 1 个 putIndex）** | **后一次替换前一次** -> 永远 1 层 |
+
+**关键区别**：**一次调用里放多个 putIndex** ✔ vs **多次调用** ✗
+
+### ★ 配套技巧：只选一个对象时，"造"一个空图层凑数
+
+**场景**：只有一个文件夹（上方没有剪贴层）✗ 且它带矢量蒙版 ✗
+-> Mrg2 会走「合并组」-> 「程序错误」
+
+**解法**：**建一个空图层，和文件夹一起选中（2 个对象）** -> 走「合并图层」✔
+
+`js
+var emptyL = doc.artLayers.add();
+emptyL.move(base, ElementPlacement.PLACEBEFORE);   // ★ 放到文件夹正上方
+`
+
+### ⚠ 这一路的三个连环坑（都踩了）
+
+| # | 坑 | 现象 |
+|---|---|---|
+| 1 | **move(base, PLACEAFTER)** | 落在"组内容之后"-> itemIndex 差 6 层，不在旁边 ✗ |
+| 2 | **rtLayers.add() 直接建** | 永远加到**文档根** -> 深层嵌套的文件夹旁边根本没有它 ✗（实测 itemIndex=111 ✗） |
+| 3 | **建完图层后 itemIndex 会变** ✗ | 必须**重新读** ase.itemIndex，否则 putIndex 指到别的层 ✗ |
+| 4 | **剪贴链重算把空层丢了** ✗ | 重算只收 grouped===true，空层不是剪贴层 ✗ -> 必须**手动补回去** ✔ |
+
+### ✔ 最终可用的完整流程（ps 连同上方图层合并_自动选层.jsx）
+
+`
+只选中一个文件夹或图层
+ ① 读选区 -> 拿 itemIndex
+ ② 找上方剪贴链（grouped===true 且序号连续）
+ ③ 若链为空 -> 建空图层 + move(PLACEBEFORE) 到基底上方
+ ④ 重新读 base.itemIndex（新建图层会改变序号 ✗）
+ ⑤ 补回空图层到 chainIdx
+ ⑥ deselect -> selectManyInOneCall([base, ...chain])   ← 一次 slct ✔
+ ⑦ 校验 countSelection() === 期望层数（不一致就中止 ✗ 不动图层）
+ ⑧ Mrg2 合并
+ ⑨ 还原名字/混合模式（穿透 -> 正常）
+`
+
+**实测结果**：带矢量蒙版的文件夹 **合并成功** ✔
+名字恢复为文件夹名 ✔、混合模式（穿透 -> 正常）✔
+
+### 对前面章节的影响
+
+- 第二章「getIdentifier() 返回 -1」**仍然成立** ✔（用 getIndex()/itemIndex ✔）
+- 第三章「5 种写法全失败」**只对那 5 种写法成立** ✔ —— **第六种（本章）可用** ✔
+- **"只能人手多选"这个结论作废** ✗ —— 脚本可以 ✔

@@ -144,6 +144,24 @@ function trySelect(ids, form) {
         refD.putEnumerated(cT("Dcmn"), cT("Ordn"), cT("Trgt"));
         desc.putReference(cT("null"), refD);
         desc.putList(cT("Lyr "), list);
+    } else if (form === "G") {
+        /* ★★★ 写法 G：来自用户笔记 ★★★
+         * 关键差别：不建 ActionList，而是在【同一个 ActionReference】上
+         * 连续多次 putIndex；再 putReference("null", ref)；并带 MkVs=false。
+         * 我此前从没试过这种编码方式。
+         * 注意：putIndex 用的是 itemIndex（父级内序号），所以同父级的层才对。 */
+        var refG = new ActionReference();
+        for (var iG = 0; iG < ids.length; iG++) {
+            /* ★ putIndex 要的是 itemIndex（父级内序号），传进来的是 id -> 先换算 */
+            var Lg = byIdWalk(doc, ids[iG]);
+            if (!Lg) { return "找不到 id=" + ids[iG]; }
+            var ixG = -1;
+            try { ixG = Lg.itemIndex; } catch (eIG) { ixG = -1; }
+            if (ixG < 0) { return "读不到 itemIndex"; }
+            refG.putIndex(cT("Lyr "), ixG);
+        }
+        desc.putReference(cT("null"), refG);
+        desc.putBoolean(cT("MkVs"), false);
     } else if (form === "E") {
         /* 目标 = 文档类（putClass） */
         var refE = new ActionReference();
@@ -198,6 +216,7 @@ if (rootLayers.length >= 2) {
     /* 写法 C 不存在，跳过 */
     p("   写法 A（目标=当前图层）-> 选中 " + trySelect(idsRoot, "A") + " 层");
     p("   写法 F（putClass Lyr）-> 选中 " + trySelect(idsRoot, "F") + " 层    ← ★");
+    p("   写法 G（连续 putIndex + MkVs）-> 选中 " + trySelect(idsRoot, "G") + " 层    ← ★★ 用户笔记");
     p("   写法 D（目标=文档 Dcmn）-> 选中 " + trySelect(idsRoot, "D") + " 层");
     p("   写法 E（目标=文档 putClass）-> 选中 " + trySelect(idsRoot, "E") + " 层");
     p("   写法 B（desc.putList(\"null\")）-> 选中 " + trySelect(idsRoot, "B") + " 层");
@@ -218,6 +237,7 @@ if (folder && folder.layers.length >= 2) {
     /* 写法 C 不存在，跳过 */
     p("   写法 A（目标=当前图层）-> 选中 " + trySelect(idsIn, "A") + " 层");
     p("   写法 F（putClass Lyr）-> 选中 " + trySelect(idsIn, "F") + " 层    ← ★");
+    p("   写法 G（连续 putIndex + MkVs）-> 选中 " + trySelect(idsIn, "G") + " 层    ← ★★");
     p("   写法 D（目标=文档 Dcmn）-> 选中 " + trySelect(idsIn, "D") + " 层");
     p("   写法 E（目标=文档 putClass）-> 选中 " + trySelect(idsIn, "E") + " 层");
     p("   写法 B  -> 选中 " + trySelect(idsIn, "B") + " 层");
@@ -255,6 +275,7 @@ if (findClipped(doc)) {
     /* 写法 C 不存在，跳过 */
     p("   写法 A（目标=当前图层）-> 选中 " + trySelect(idsPair, "A") + " 层");
     p("   写法 F（putClass Lyr）-> 选中 " + trySelect(idsPair, "F") + " 层    ← ★");
+    p("   写法 G（连续 putIndex + MkVs）-> 选中 " + trySelect(idsPair, "G") + " 层    ← ★★");
     p("   写法 D（目标=文档 Dcmn）-> 选中 " + trySelect(idsPair, "D") + " 层");
     p("   写法 E（目标=文档 putClass）-> 选中 " + trySelect(idsPair, "E") + " 层");
     p("   写法 B  -> 选中 " + trySelect(idsPair, "B") + " 层");
