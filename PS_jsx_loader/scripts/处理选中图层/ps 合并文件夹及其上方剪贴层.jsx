@@ -158,18 +158,6 @@ function layerByIndex(index) {
     })(DOC);
     return found;
 }
-/* 读回"当前真实选中了几层" —— 用来验证选区，别再靠假设 */
-function countSelected() {
-    try {
-        var ref = new ActionReference();
-        ref.putProperty(sid("property"), sid("targetLayers"));
-        ref.putEnumerated(sid("document"), sid("ordinal"), sid("targetEnum"));
-        var d = executeActionGet(ref);
-        if (!d.hasKey(sid("targetLayers"))) return 0;
-        return d.getList(sid("targetLayers")).count;
-    } catch (e) { return -1; }
-}
-
 /* 多选（列表按【从上到下】给）
  * --------------------------------------------------------------------------
  * ★★★ 两个键千万别搞混（踩过的坑）★★★
@@ -362,106 +350,27 @@ function doWork() {
      *     ② 选「上方剪贴链 + 那个图层」-> Mrg2        -> 真正合成一层
      * ---------------------------------------------------------------------- */
 
-    /* ★ 合并前预处理：剪辑链上每层都解锁 / 取消背景层 / 栅格化智能对象。
-       「命令"合并图层"当前不可用」最常见的真凶就是这三样。 */
-    for (var __pk = 0; __pk < chain.length; __pk++) {
-        var __Lk = chain[__pk];
-        var __nk = [];
-        try { if (__Lk.isBackgroundLayer) { __Lk.isBackgroundLayer = false; __nk.push("取消背景层"); } } catch (eK1) {}
-        try { if (__Lk.allLocked) { __Lk.allLocked = false; __nk.push("解除全部锁定"); } } catch (eK2) {}
-        try { if (__Lk.positionLocked) { __Lk.positionLocked = false; __nk.push("解除位置锁定"); } } catch (eK3) {}
-        try { if (__Lk.kind === LayerKind.SMARTOBJECT) { __Lk.rasterize(RasterizeType.ENTIRELAYER); __nk.push("栅格化智能对象"); } } catch (eK4) { __nk.push("栅格化失败：" + cleanMsg("" + eK4)); }
-        if (__nk.length) plog("  预处理「" + safeName(__Lk) + "」：" + __nk.join(" / "));
-    }
-
-    /* ★ 合并期间关掉 PS 的确认框：矢量智能对象合并时要栅格化，
-       脚本里没人点确认 -> 会报「用户取消了操作」。
-       （app.displayDialogs 才能影响 layer.merge() 这类 ExtendScript 方法） */
-    var __prevDialogs = null;
-    try { __prevDialogs = app.displayDialogs; } catch (ePD) { __prevDialogs = null; }
-    try { app.displayDialogs = DialogModes.NO; } catch (ePD2) {}
-
-    /* ① 拍平文件夹：用 LayerSet.merge()（= PS 的 Ctrl+E 合并组）
-     * ★★★ 别再对"单个组"用 Mrg2 ★★★
-     *   MRg2 的命令名是【合并图层】，要求至少两层；对单个组执行会报
-     *   「命令"合并图层"当前不可用」。LayerSet.merge() 才是合并组。
-     * ---------------------------------------------------------------------- */
-    plog("第 1 步：拍平文件夹（LayerSet.merge()）…");
+    /* ① 只选文件夹，先拍平 */
+    plog("第 1 步：拍平文件夹（只选文件夹 -> Mrg2）…");
+    selectLayersByIds([R.folderId]);
+    executeAction(cid("Mrg2"), new ActionDescriptor(), DialogModes.NO);
 
     var flatId = -1;
-    try {
-        var mergedL = folder.merge();
-        if (mergedL) flatId = getId(mergedL);
-        if (flatId >= 0) plog("  merge() 成功，结果图层 id=" + flatId);
-    } catch (eM1) {
-        plog("  merge() 失败：" + cleanMsg("" + eM1) + "　改用 Mrg2 退路");
-    }
-
-    if (flatId < 0) {
-        try {
-            selectLayersByIds([R.folderId]);
-            executeAction(cid("Mrg2"), new ActionDescriptor(), DialogModes.NO);
-            var flatL = DOC.activeLayer; if (flatL) flatId = getId(flatL);
-        } catch (eM2) {
-            plog("  退路 Mrg2 也失败：" + cleanMsg("" + eM2));
-        }
-    }
-    if (flatId < 0) throw new Error("拍平文件夹失败（merge() 与 Mrg2 都没成）");
+    try { var flatL = DOC.activeLayer; if (flatL) flatId = getId(flatL); } catch (eF) { flatId = -1; }
+    if (flatId < 0) throw new Error("拍平文件夹后拿不到活动图层");
     plog("  已拍平，结果图层 id=" + flatId + "　名字=「" + safeName(DOC.activeLayer) + "」");
 
-    /* ② 上方剪贴链：从最下面那层开始，逐层 ArtLayer.merge()（合并向下）
-     * ★ 不用 Mrg2 多选：PS 对"多选 + 合并图层"经常报
-     *   「命令"合并图层"当前不可用」，而且含组时还会只做合并组。
-     *   merge() 是"与下面那层合并"，一层层并下去，语义最确定。
-     *   （合并向下保留【下面那层】的 id，所以拍平后的图层一直有效。）
-     * ------------------------------------------------------------------ */
+    /* ② 再连同上方剪贴链合并（没有剪贴层就只拍平） */
     if (chain.length > 0) {
-        /* ★ 第 2 步：先走【Mrg2 多选】—— 这条路在真实文档上验证过可用
-         *   （日志实测：3 层多选 -> 消失 4 个 -> 合成 1 层，结果正确）。
-         *   万一失败，再退回逐层 ArtLayer.merge()。
-         * -------------------------------------------------------------- */
-        var ids2 = [];
-        for (var q2 = chain.length - 1; q2 >= 0; q2--) ids2.push(getId(chain[q2]));   /* 从上到下 */
-        ids2.push(flatId);                                                            /* 拍平后的层在最下 */
-        plog("第 2 步：连同上方 " + chain.length + " 个剪贴层合并（共 " + ids2.length + " 层）：" + ids2.join(", "));
-
-        /* ★ 先验证选区真的选中了 N 层 ——「命令"合并图层"当前不可用」
-           最常见的原因就是实际只选中了 1 层（合并图层至少要 2 层）。 */
-        var step2ok = false;
-        try {
-            selectLayersByIds(ids2);
-            var cnt2 = countSelected();
-            plog("  选区自检：想选 " + ids2.length + " 层，实际选中 " + cnt2 + " 层");
-            if (cnt2 === ids2.length) {
-                executeAction(cid("Mrg2"), new ActionDescriptor(), DialogModes.NO);
-                step2ok = true;
-                plog("  ✔ Mrg2 多选合并成功");
-            } else {
-                plog("  ★ 选区数量不对，跳过 Mrg2，改用逐层合并向下");
-            }
-        } catch (eS2) {
-            plog("  Mrg2 多选失败（" + cleanMsg("" + eS2) + "），改用逐层合并向下");
-        }
-
-        if (!step2ok) {
-            var flatLayer = null;
-            try { flatLayer = DOC.activeLayer; } catch (eFL) { flatLayer = null; }
-            if (!flatLayer) throw new Error("第 2 步：拿不到活动图层");
-            for (var q = chain.length - 1; q >= 0; q--) {
-                try {
-                    chain[q].merge();
-                    plog("  ✔ 已并入「" + safeName(chain[q]) + "」（逐层）");
-                } catch (eM3) {
-                    throw new Error("合并「" + safeName(chain[q]) + "」失败：" + cleanMsg("" + eM3));
-                }
-            }
-        }
+        var ids = [];
+        for (var q = chain.length - 1; q >= 0; q--) ids.push(getId(chain[q]));   /* 从上到下 */
+        ids.push(flatId);                                                        /* 拍平后的图层在最下 */
+        plog("第 2 步：连同上方 " + chain.length + " 个剪贴层合并（共 " + ids.length + " 层，从上到下）：" + ids.join(", "));
+        selectLayersByIds(ids);
+        executeAction(cid("Mrg2"), new ActionDescriptor(), DialogModes.NO);
     } else {
         plog("第 2 步：上方没有剪贴层，跳过（只需拍平）");
     }
-
-    /* 合并做完了，还原对话框设置 */
-    try { if (__prevDialogs !== null) app.displayDialogs = __prevDialogs; } catch (ePD3) {}
 
     /* ---- ⑥ 找结果层 ----
        合并通常把【下面那层】留下来 = 复用文件夹的 id；也可能生成全新 id。
@@ -490,16 +399,10 @@ function doWork() {
     R.mergedName = safeName(res);
     plog("结果层：「" + R.mergedName + "」　id=" + R.mergedId + "　还是文件夹吗=" + (isGroup(res) ? "是(★异常)" : "否"));
 
-    /* ---- ⑦ 校验：消失的层数应该正好 ----
-     * ★ 公式修正：
-     *   拍平文件夹时，"文件夹自己 + 它的 N 个后代" 会变成 1 个图层，
-     *   所以消失的是 N 个（后代数），【文件夹自己不算额外消失】。
-     *   第二步把 M 个剪贴层并进这 1 个，消失 M 个。
-     *   合计 = 后代数 + 剪贴层数。
-     *   （以前多算了"+1 文件夹自己"，所以总是报"预期 5、实际 4"的假警报。） */
-    var expectGone = R.folderDescendants + chain.length;
+    /* ---- ⑦ 校验：消失的层数应该正好 ---- */
+    var expectGone = R.folderDescendants + 1 /* 文件夹自己 */ + chain.length;
     plog("  [校验] 预期消失 " + expectGone + " 个（文件夹后代 " + R.folderDescendants +
-         " + 上方剪贴链 " + chain.length + "；文件夹自己并入首层、不额外算），实际消失 " + goneCount + " 个");
+         " + 文件夹自己 1 + 上方剪贴链 " + chain.length + "），实际消失 " + goneCount + " 个");
     if (goneCount !== expectGone) {
         R.warn.push("★ 消失的图层数(" + goneCount + ")和预期(" + expectGone +
                     ")对不上 —— 有可能多合掉了别的图层，请检查画面（或 Ctrl+Z 撤销）");
@@ -527,24 +430,11 @@ function doWork() {
         goalName = R.uniformMode;
         note = "内部图层（排除剪贴层）模式一致 = " + R.uniformMode + " -> 套用到结果层";
     } else if (R.uniformMode && isNormalMode(R.uniformMode)) {
-        /* ★★ 两种子情况要分开 ★★
-           ① 文件夹原本是【穿透】(PassThrough)：
-              合并结果是【普通图层】，而"穿透"只能用于图层组 ——
-              PS 会报「"穿透"混合模式只可用于图层组」。
-              这是必然的，不是失败：结果保持【正常】正是要的效果，
-              所以【不要去设置、也不要记警告】。
-           ② 其它模式：保持文件夹原本的模式即可（内部全是正常 -> 不改）。 */
-        if (String(R.folderBlend).toUpperCase() === "PASSTHROUGH") {
-            doSet = false;
-            note = "内部图层全是【正常】；文件夹原为【穿透】—— 结果层是普通图层，" +
-                   "保持【正常】（符合预期，不视为失败）";
-        } else {
-            doSet = true;
-            goalVal = R.folderBlendVal;
-            goalName = R.folderBlend;
-            note = "内部图层（排除剪贴层）全是【正常】-> 按需求不修改" +
-                   "（保持文件夹原本的模式：" + R.folderBlend + "）";
-        }
+        doSet = true;
+        goalVal = R.folderBlendVal;
+        goalName = R.folderBlend;
+        note = "内部图层（排除剪贴层）全是【正常】-> 按需求不修改" +
+               "（保持文件夹原本的模式：" + R.folderBlend + "）";
     } else if (R.innerModes.length > 1) {
         doSet = true;
         goalVal = R.folderBlendVal;
