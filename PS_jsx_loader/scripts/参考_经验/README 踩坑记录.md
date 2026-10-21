@@ -701,3 +701,52 @@ emptyL.move(base, ElementPlacement.PLACEBEFORE);   // ★ 放到文件夹正上�
 - 第二章「getIdentifier() 返回 -1」**仍然成立** ✔（用 getIndex()/itemIndex ✔）
 - 第三章「5 种写法全失败」**只对那 5 种写法成立** ✔ —— **第六种（本章）可用** ✔
 - **"只能人手多选"这个结论作废** ✗ —— 脚本可以 ✔
+
+---
+
+## 十六、⚠ 「合并选中的多个图层」不能用 ctiveLayer.merge()
+
+### ✗ 常见但错误的写法
+
+`js
+var selectedLayers = getSelectedLayers();
+if (selectedLayers.length > 1) {
+    var mergedLayer = doc.activeLayer.merge();   // ★ 错 ✗
+}
+`
+
+**网上和笔记里常这么写** ✗ —— **但 ctiveLayer.merge() 不是"合并选中的多个图层"** ✗ ✔
+
+### 实测后果
+
+选中 4 组、每组 2 层，对其中一组调 merge()：
+
+`
+—— 组1 ——  L.merge() 成功
+   · 结果层 id(1791) 不是应用层 id(1790)      ← 没保留下面那层
+—— 组2 ——  ★ 应用层 id=1788 已经不存在        ← 被一起吞掉了
+—— 组3 ——  ★ 应用层 id=1786 已经不存在
+—— 组4 ——  ★ 应用层 id=1390 已经不存在
+`
+
+**一次 merge() 吃掉了 6 个无关图层** ✗ ✔
+
+### ✔ 正确写法
+
+`js
+/* 「合并图层」= Ctrl+E，作用在【现有选区】上 */
+executeAction(charIDToTypeID("Mrg2"), new ActionDescriptor(), DialogModes.NO);
+`
+
+**前提**：选区里必须 ≥2 个对象 ✗（否则报「命令"合并图层"当前不可用」）
+
+### 判断标准
+
+| 想做的事 | 用什么 |
+|---|---|
+| 合并 **选中的多个** 图层 | executeAction("Mrg2") ✔ |
+| 合并 **一个组**（拍平文件夹） | Mrg2（选中该 LayerSet ✗）或 layerSet.merge() |
+| 把 **某一层** 并进它下面那层 | **没有安全 API** ✗ —— ArtLayer.merge() 很危险 ✗ |
+
+**结论**：**凡是想"合并多个图层"，一律走 Mrg2 + 真实选区** ✔
+"逐层 merge 向下" 这条路在本项目已被证否 ✗ ✔
