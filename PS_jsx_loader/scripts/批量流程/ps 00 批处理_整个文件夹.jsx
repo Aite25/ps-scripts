@@ -42,6 +42,9 @@ var OPTIONS = {
     suffix: "_已处理",
     skipDone: true,             // 跳过已经处理过的（输出目录里已存在同名结果）
     closePS: false,             // 全部处理完是否退出 Photoshop
+    // ★ 每份文件处理完（文档已关闭）后清理 Photoshop 缓存：撤销历史 / 剪贴板 / 内存缓存。
+    //   关闭文档只是"文档走了"，PS 的堆不会自动还给系统；purge 才能真正释放，减缓越跑越慢。
+    purgeAfterEach: true,
     askOptions: true,
     remember: true,
     // ★ 备份：跑到【第 backupAfterStep 号】之后另存一份备份（默认 6 = ps 06 之后）
@@ -274,6 +277,16 @@ function processOne(file, idx, total) {
         try { $.global.PSJSX_BATCH = false;
     try { $.global.PSJSX_DIFF_OK = false; } catch (eDOK1) {} } catch (eG) {}
         if (doc) { try { doc.close(SaveOptions.DONOTSAVECHANGES); } catch (eC2) {} }
+    }
+
+    /* ★ 文档已经关闭了 —— 这一步清理 Photoshop 自己的缓存。
+       关闭文档只释放"文档"，撤销历史/剪贴板/内存缓存还挂着；
+       PurgeTarget.ALLCACHES 相当于菜单的「编辑 > 清理 > 全部」，
+       能实际把内存降下去一些，减轻后面几个文件越跑越慢。 */
+    if (OPTIONS.purgeAfterEach) {
+        try { app.purge(PurgeTarget.ALLCACHES); } catch (ePG) {
+            plog("    ! 清理缓存失败（忽略）：" + cleanMsg("" + ePG));
+        }
     }
 }
 
@@ -984,6 +997,7 @@ function loadPrefs() {
             if (k === "suffix") OPTIONS.suffix = v;
             if (k === "skipDone") OPTIONS.skipDone = (v === "1");
             if (k === "closePS") OPTIONS.closePS = (v === "1");
+            if (k === "purgeAfterEach") OPTIONS.purgeAfterEach = (v !== "0");
             if (k === "stopAtStep") { var n1 = parseInt(v, 10); if (!isNaN(n1)) OPTIONS.stopAtStep = n1; }
             if (k === "backupAfterStep") { var n2 = parseInt(v, 10); if (!isNaN(n2)) OPTIONS.backupAfterStep = n2; }
             // 兼容旧版（老键 backupAfter 存的是脚本名）：空 = 关掉备份，非空 = 用它那一号
@@ -1008,6 +1022,7 @@ function savePrefs() {
         f.write("stopAtStep=" + OPTIONS.stopAtStep + "\n");
         f.write("backupAfterStep=" + OPTIONS.backupAfterStep + "\n");
         f.write("closePS=" + (OPTIONS.closePS ? "1" : "0") + "\n");
+    f.write("purgeAfterEach=" + (OPTIONS.purgeAfterEach ? "1" : "0") + "\n");
         f.close();
     } catch (e) {}
 }
