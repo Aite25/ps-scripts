@@ -147,7 +147,7 @@ function processOne(file, idx, total) {
             if (nm.length > OPTIONS.suffix.length && nm.lastIndexOf(OPTIONS.suffix) === nm.length - OPTIONS.suffix.length) {
                 skipNow = true;
             }
-        } else if (dest && dest.exists) {
+        } else if (dest && actualSavedFile(dest)) {
             skipNow = true;
         }
     }
@@ -372,7 +372,8 @@ function backupNow(doc, file) {
         try { so.alphaChannels = true; } catch (e2) {}
         try { so.layers = true; } catch (e3) {}
         doc.saveAs(dest, so, true, Extension.LOWERCASE);
-        return dest.fsName;
+        var actualB = actualSavedFile(dest) || dest;
+        return actualB.fsName;
     } catch (e) {
         plog("    ! 备份出错：" + cleanMsg("" + e));
         return null;
@@ -445,6 +446,26 @@ function outFolderFor(file) {
     return f;
 }
 
+/* ★★★ PS 实际写出来的扩展名可能和我们请求的不一样 ★★★
+ *   我们用 PhotoshopSaveOptions（PSD 格式）保存，PS 会按格式把扩展名改写成 .psd，
+ *   所以请求的 xxx.psb 根本不出现 —— 实测三份结果全是 .psd，
+ *   而校验按 .psb 去找，就误报"文件没写出来"，整批三个文件全被记成失败。
+ *   这里统一按"磁盘上真实存在的那个文件"来认，两个扩展名都接受。 */
+function actualSavedFile(dest) {
+    if (!dest) return null;
+    try { if (dest.exists) return dest; } catch (e0) {}
+    var p = "";
+    try { p = String(dest.fsName); } catch (e1) { return null; }
+    var cands = [];
+    cands.push(p.replace(/\.psb$/i, ".psd"));
+    cands.push(p.replace(/\.psd$/i, ".psb"));
+    for (var i = 0; i < cands.length; i++) {
+        if (!cands[i] || cands[i] === p) continue;
+        try { var f = File(cands[i]); if (f.exists) return f; } catch (e2) {}
+    }
+    return null;
+}
+
 function saveDoc(doc, file) {
     var dest = destFor(file);
     if (!dest) throw new Error("算不出输出路径");
@@ -464,12 +485,14 @@ function saveDoc(doc, file) {
        Photoshop 在"超出格式上限"时【不报错】，而是写出一个残缺文件：
        实测 2.97GB 的文档存成 .psd，得到一个 101KB 的废文件，全批处理却当成功。
        这里检查写出来的文件是不是小得离谱；是的话删掉并抛错，让批处理如实报失败。 */
-    var bad = validateSavedFile(dest);
+    var actual = actualSavedFile(dest) || dest;
+    try { plog("    · 结果文件：" + actual.name + "（" + Math.round(actual.length / 1024 / 1024) + " MB）"); } catch (eP2) {}
+    var bad = validateSavedFile(actual);
     if (bad) {
-        try { dest.remove(); } catch (eRm) {}
+        try { actual.remove(); } catch (eRm) {}
         throw new Error("保存结果异常（" + bad + "），已把那个坏文件删掉；原文件未受影响");
     }
-    return dest.fsName;
+    return actual.fsName;
 }
 
 /* 检查刚写出来的结果文件是否合理。返回 "" = 正常；否则返回原因。
