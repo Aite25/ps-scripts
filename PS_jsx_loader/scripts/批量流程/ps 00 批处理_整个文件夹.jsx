@@ -45,6 +45,11 @@ var OPTIONS = {
     // ★ 每份文件处理完（文档已关闭）后清理 Photoshop 缓存：撤销历史 / 剪贴板 / 内存缓存。
     //   关闭文档只是"文档走了"，PS 的堆不会自动还给系统；purge 才能真正释放，减缓越跑越慢。
     purgeAfterEach: true,
+    // ★ 是否保留每个步骤的差值对比层（__对比 01-解锁前 / 02-删除前 / 04 / 05 / 07 …）
+    //   true  = 每步都在最顶层留一张（默认关灯，不影响画面），方便事后逐步检查
+    //   false = 一概不建（省内存、文件更小；以前批处理就是这个行为）
+    //   注意：开着会让每份文档多几张全屏图层，内存和文件大小都会上升。
+    keepDiff: true,
     askOptions: true,
     remember: true,
     // ★ 备份：跑到【第 backupAfterStep 号】之后另存一份备份（默认 6 = ps 06 之后）
@@ -171,7 +176,10 @@ function processOne(file, idx, total) {
     /* ★ 整文件夹批处理：明确【不建】对比层（几百个文件都建差值层会白占内存），
        子脚本用 diffSkipped() 判断就是看这个开关。
        （ps 00_single 只处理当前一个文件，它会把这里设成 true，跑完保留对比层。） */
-    try { $.global.PSJSX_DIFF_OK = false; } catch (eDOK0) {}
+    /* ★ 是否建对比层由 OPTIONS.keepDiff 决定（以前这里硬编码 false，
+       导致整文件夹批处理一份对比层都没有）。 */
+    try { $.global.PSJSX_DIFF_OK = (OPTIONS.keepDiff === true); } catch (eDOK0) {}
+    plog("    对比层：" + (OPTIONS.keepDiff ? "保留（每步建一张差值层，默认关灯）" : "不建"));
         var steps = [];
         var backedUp = false;
         var skippedRest = false;   // ★ 是否因为某一步失败而跳过了剩余步骤
@@ -256,6 +264,18 @@ function processOne(file, idx, total) {
         }
         $.global.PSJSX_BATCH = false;
     try { $.global.PSJSX_DIFF_OK = false; } catch (eDOK1) {}
+
+        /* ★ 统计这次留下了几张对比层（写进日志，方便核对是不是每步都建了） */
+        try {
+            var __dc = 0, __dn = [];
+            var __tl = doc.layers;
+            for (var __i = 0; __i < __tl.length; __i++) {
+                var __nm0 = "";
+                try { __nm0 = "" + __tl[__i].name; } catch (eDCN) { __nm0 = ""; }
+                if (__nm0.length >= 4 && __nm0.substring(0, 4) === "__对比") { __dc++; __dn.push(__nm0); }
+            }
+            plog("    对比层：" + __dc + " 张" + (__dc ? ("（" + __dn.join("；") + "）") : ""));
+        } catch (eDC) {}
 
         // 保存
         var tS = nowMs();
@@ -755,6 +775,9 @@ function askDialog() {
     var cbSkip = gAddCheckbox(o2, "跳过已处理过的", !!OPTIONS.skipDone);
     var cbQuit = gAddCheckbox(o2, "跑完退出 Photoshop", !!OPTIONS.closePS);
     var cbRem = gAddCheckbox(o2, "记住我的选择", !!OPTIONS.remember);
+    /* 单独一行：o2 里已经有三个勾选，再挤会超出对话框宽度 */
+    var o2b = gO.add("group");
+    var cbDiff = gAddCheckbox(o2b, "保留每步的对比层（差值层，默认关灯，文件会变大）", !!OPTIONS.keepDiff);
 
     var o3 = gO.add("group");
     var cbBk = gAddCheckbox(o3, "跑完第", OPTIONS.backupAfterStep > 0);
@@ -830,6 +853,7 @@ function askDialog() {
         }
     }
     OPTIONS.suffix = etSuf.text;
+    OPTIONS.keepDiff = (cbDiff.value === true);
     OPTIONS.skipDone = (cbSkip.value === true);
     OPTIONS.closePS = (cbQuit.value === true);
     OPTIONS.remember = (cbRem.value === true);
@@ -997,6 +1021,7 @@ function loadPrefs() {
             if (k === "suffix") OPTIONS.suffix = v;
             if (k === "skipDone") OPTIONS.skipDone = (v === "1");
             if (k === "closePS") OPTIONS.closePS = (v === "1");
+            if (k === "keepDiff") OPTIONS.keepDiff = (v !== "0");
             if (k === "purgeAfterEach") OPTIONS.purgeAfterEach = (v !== "0");
             if (k === "stopAtStep") { var n1 = parseInt(v, 10); if (!isNaN(n1)) OPTIONS.stopAtStep = n1; }
             if (k === "backupAfterStep") { var n2 = parseInt(v, 10); if (!isNaN(n2)) OPTIONS.backupAfterStep = n2; }
@@ -1022,6 +1047,7 @@ function savePrefs() {
         f.write("stopAtStep=" + OPTIONS.stopAtStep + "\n");
         f.write("backupAfterStep=" + OPTIONS.backupAfterStep + "\n");
         f.write("closePS=" + (OPTIONS.closePS ? "1" : "0") + "\n");
+        f.write("keepDiff=" + (OPTIONS.keepDiff ? "1" : "0") + "\n");
     f.write("purgeAfterEach=" + (OPTIONS.purgeAfterEach ? "1" : "0") + "\n");
         f.close();
     } catch (e) {}
